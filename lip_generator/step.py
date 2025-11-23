@@ -114,7 +114,7 @@ class SimpleBipedGaitProblem:
                 timeStep,
                 [self.rfId, self.lfId],
                 comTask=com_initial_center + (com_initial_target - com_initial_center) * 0.8 * ((k + 1) / supportKnots),
-                comWeight=5e5
+                comWeight=1e9
             )
             for k in range(supportKnots)
         ]
@@ -151,7 +151,7 @@ class SimpleBipedGaitProblem:
                     timeStep,
                     [self.rfId, self.lfId],
                     comTask=com_center + (com_support - com_center) * 0.5 * ((k + 1) / supportKnots),
-                    comWeight=5e5
+                    comWeight=1e9
                 )
                 for k in range(supportKnots)
             ]
@@ -201,7 +201,7 @@ class SimpleBipedGaitProblem:
                     timeStep,
                     [self.rfId, self.lfId],
                     comTask=com_center + (com_support - com_center) * 0.5 * ((k + 1) / supportKnots),
-                    comWeight=5e5
+                    comWeight=1e9
                 )
                 for k in range(supportKnots)
             ]
@@ -241,7 +241,7 @@ class SimpleBipedGaitProblem:
                 timeStep,
                 [self.rfId, self.lfId],
                 comTask=com_last_position + (com_final - com_last_position) * ((k + 1) / supportKnots),
-                comWeight=5e5
+                comWeight=1e9
             )
             for k in range(supportKnots)
         ]
@@ -398,7 +398,7 @@ class SimpleBipedGaitProblem:
                     supportFootIds,
                     comTask=comTask,
                     swingFootTask=swingFootTask,
-                    footWeight=8e6
+                    footWeight=5e7
                 )
             ]
 

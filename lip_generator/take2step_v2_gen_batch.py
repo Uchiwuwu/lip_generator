@@ -36,11 +36,11 @@ except ImportError:
 
 # Configuration
 OUTPUT_FILE = "stepping_dataset.npz"
-NUM_KNOTS = 25
 TIME_STEP = 0.02
-STEP_KNOTS = NUM_KNOTS
-SUPPORT_KNOTS = 10
+STEP_KNOTS = 13
+SUPPORT_KNOTS = 4
 WITHDISPLAY = False
+CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
 
 # Step generation parameters
 STEP_HEIGHT = 0.15  # Step height in meters
@@ -50,13 +50,14 @@ MID_WAIT_TIME_RANGE = (0.3, 0.6)  # Waiting period between two steps (seconds)
 GRID_X_STEPS = 5  # Number of steps in x direction
 GRID_Y_STEPS = 3  # Number of steps in y direction
 GRID_YAW_STEPS = 3  # Number of steps in yaw direction
-XY_STEP_UNIT = 0.1
+X_STEP_UNIT = 0.1
+Y_STEP_UNIT = 0.05
 Y_OFFSET = 0.15
 YAW_STEP_UNIT = 0.1
 
 # Solver parameters
-MAX_ITERATIONS = 100  # Reduced to avoid divergence
-SOLVER_THRESHOLD = 1e-6  # Relaxed threshold to exit early
+MAX_ITERATIONS = 250  # Reduced to avoid divergence
+SOLVER_THRESHOLD = 1e-7  # Relaxed threshold to exit early
 
 
 def get_memory_usage():
@@ -149,16 +150,16 @@ def transform_to_stance_frame(target_pos, stance_pos, stance_R, target_yaw):
 
 
 def generate_grid_samples(
-    lfPos0, rfPos0, grid_x_steps, grid_y_steps, grid_yaw_steps, xy_step_unit, y_offset, yaw_step_unit
+    lfPos0, rfPos0, grid_x_steps, grid_y_steps, grid_yaw_steps, x_step_unit, y_step_unit, y_offset, yaw_step_unit
 ):
     samples = []
-    x_values_right = np.arange(-grid_x_steps/2, grid_x_steps/2) * xy_step_unit 
-    y_values_right = -np.arange(grid_y_steps) * xy_step_unit - y_offset
+    x_values_right = np.arange(-grid_x_steps/2, grid_x_steps/2) * x_step_unit 
+    y_values_right = -np.arange(grid_y_steps) * y_step_unit - y_offset
     yaw_values_right = np.arange(-grid_yaw_steps/2, grid_yaw_steps/2) * yaw_step_unit
 
     #left swing, respected to right stance
-    x_values_left = np.arange(-grid_x_steps/2, grid_x_steps/2) * xy_step_unit 
-    y_values_left = np.arange(grid_y_steps) * xy_step_unit + y_offset
+    x_values_left = np.arange(-grid_x_steps/2, grid_x_steps/2) * x_step_unit 
+    y_values_left = np.arange(grid_y_steps) * y_step_unit + y_offset
     yaw_values_left = np.arange(-grid_yaw_steps/2, grid_yaw_steps/2) * yaw_step_unit
     # First sequence: Right foot swings, then left foot swings
     for dx1 in x_values_right:
@@ -361,7 +362,10 @@ def generate_waiting_frames(robot, gait, x0, num_frames, left_target, right_targ
         p_wcom_data[i] = com_world
         T_wbase_data[i] = [body_pos[0], body_pos[1], body_pos[2], body_quat[3], body_quat[0], body_quat[1], body_quat[2]]
         cmd_footstep_data[i] = cmd_footstep
-        cmd_stance_data[i, 0] = 0 if stance_is_left else 1
+        #detect the previous cmd_stance, if next stance foot is left, the previous foot is right
+        cmd_stance_data[i, 0] = 1 if stance_is_left else 0
+
+    print("while waiting, stance foot:", cmd_stance_data[0,0])
 
     return {
         "q": q_data,
@@ -567,6 +571,36 @@ def extract_feet_from_trajectory(robot, q_trajectory, start_idx, end_idx, foot_f
     return np.array(foot_trajectory)
 
 
+def save_checkpoint(checkpoint_num, all_q, all_qd, all_T_blf, all_T_brf, all_T_stsw,
+                    all_p_wcom, all_T_wbase, all_v_b, all_cmd_footstep,
+                    all_cmd_stance, all_cmd_countdown, traj_starts):
+    """Save checkpoint of accumulated data."""
+    checkpoint_file = f"checkpoint_{checkpoint_num:04d}.npz"
+
+    # Concatenate all data
+    q = np.vstack(all_q)
+    qd = np.vstack(all_qd)
+    T_blf = np.vstack(all_T_blf)
+    T_brf = np.vstack(all_T_brf)
+    T_stsw = np.vstack(all_T_stsw)
+    p_wcom = np.vstack(all_p_wcom)
+    T_wbase = np.vstack(all_T_wbase)
+    v_b = np.vstack(all_v_b)
+    cmd_footstep = np.vstack(all_cmd_footstep)
+    cmd_stance = np.vstack(all_cmd_stance)
+    cmd_countdown = np.vstack(all_cmd_countdown)
+    traj = np.array(traj_starts[:-1], dtype=np.int32)  # Exclude the last pending start
+
+    np.savez_compressed(
+        checkpoint_file,
+        q=q, qd=qd, T_blf=T_blf, T_brf=T_brf, T_stsw=T_stsw,
+        p_wcom=p_wcom, T_wbase=T_wbase, v_b=v_b,
+        cmd_footstep=cmd_footstep, cmd_stance=cmd_stance, cmd_countdown=cmd_countdown,
+        traj=traj, traj_dt=TIME_STEP,
+    )
+    print(f"  ✓ Checkpoint saved: {checkpoint_file} ({len(traj)} trajectories, {len(q)} timesteps)")
+
+
 def plot_com_trajectory(robot, q_trajectory, traj_start, traj_end, traj_idx):
     """Plot COM trajectory for a single trajectory segment."""
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
@@ -673,7 +707,7 @@ def main():
     # Generate grid samples
     print("\n[3/4] Generating grid samples...")
     grid_samples = generate_grid_samples(
-        lfPos0, rfPos0, GRID_X_STEPS, GRID_Y_STEPS, GRID_YAW_STEPS, XY_STEP_UNIT, Y_OFFSET, YAW_STEP_UNIT
+        lfPos0, rfPos0, GRID_X_STEPS, GRID_Y_STEPS, GRID_YAW_STEPS, X_STEP_UNIT, Y_STEP_UNIT, Y_OFFSET, YAW_STEP_UNIT
     )
     print(f"Total grid samples: {len(grid_samples)}")
 
@@ -692,8 +726,8 @@ def main():
     traj_starts = [0]  # First trajectory starts at index 0
 
     successful_samples = 0
-    initial_memory = get_memory_usage()
-    print(f"Initial memory usage: {initial_memory:.2f} MB")
+    # initial_memory = get_memory_usage()
+    # print(f"Initial memory usage: {initial_memory:.2f} MB")
 
     for i, sample in enumerate(grid_samples):
         # Recreate gait EVERY iteration to completely prevent state accumulation
@@ -701,9 +735,9 @@ def main():
         gait = SimpleBipedGaitProblem(robot.model, rightFoot, leftFoot, fwddyn=False)
 
         # Track memory for every sample
-        current_memory = get_memory_usage()
-        memory_delta = current_memory - initial_memory
-        print(f"\n[Memory] Sample {i}: {current_memory:.2f} MB (Δ{memory_delta:+.2f} MB)")
+        # current_memory = get_memory_usage()
+        # memory_delta = current_memory - initial_memory
+        # print(f"\n[Memory] Sample {i}: {current_memory:.2f} MB (Δ{memory_delta:+.2f} MB)")
 
         print(f"--- Sample {i + 1}/{len(grid_samples)} ---")
 
@@ -732,8 +766,8 @@ def main():
 
         if not success1 or solver1 is None:
             # Track memory on failure
-            if (i + 1) % 100 == 0:
-                print(f"  [Memory on failure] {get_memory_usage():.2f} MB")
+            # if (i + 1) % 100 == 0:
+            #     print(f"  [Memory on failure] {get_memory_usage():.2f} MB")
             continue
 
         # Visualize first step
@@ -907,81 +941,89 @@ def main():
         # Force garbage collection EVERY successful sample to free memory aggressively
         gc.collect()
 
-        # Report memory every 50 samples
-        if successful_samples % 50 == 0:
-            current_memory = get_memory_usage()
-            memory_delta = current_memory - initial_memory
-            print(f"  [Memory after GC] {current_memory:.2f} MB (Δ{memory_delta:+.2f} MB)")
+        # Save checkpoint if enabled
+        if CHECKPOINT_FREQUENCY > 0 and successful_samples % CHECKPOINT_FREQUENCY == 0:
+            save_checkpoint(
+                successful_samples, all_q, all_qd, all_T_blf, all_T_brf, all_T_stsw,
+                all_p_wcom, all_T_wbase, all_v_b, all_cmd_footstep,
+                all_cmd_stance, all_cmd_countdown, traj_starts
+            )
 
-        # Optionally plot this trajectory (every Nth sample to avoid too many plots)
-        if successful_samples % 10 == 0:  # Plot every 10th successful sample
-            print(f"  Plotting trajectory {successful_samples}...")
-            # Combine all data for this trajectory
-            traj_q = np.vstack([
-                wait_data_before["q"], step1_data["q"], wait_data_mid["q"],
-                step2_data["q"], wait_data_after["q"]
-            ])
-            # Extract COM and feet
-            com_traj = extract_com_from_trajectory(robot, traj_q, 0, len(traj_q))
-            lf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "left_foot_link")
-            rf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "right_foot_link")
+        # Report memory every 50 samples
+        # if successful_samples % 50 == 0:
+        #     current_memory = get_memory_usage()
+        #     memory_delta = current_memory - initial_memory
+        #     print(f"  [Memory after GC] {current_memory:.2f} MB (Δ{memory_delta:+.2f} MB)")
+
+        # # Optionally plot this trajectory (every Nth sample to avoid too many plots)
+        # if successful_samples % 10 == 0:  # Plot every 10th successful sample
+        #     print(f"  Plotting trajectory {successful_samples}...")
+        #     # Combine all data for this trajectory
+        #     traj_q = np.vstack([
+        #         wait_data_before["q"], step1_data["q"], wait_data_mid["q"],
+        #         step2_data["q"], wait_data_after["q"]
+        #     ])
+        #     # Extract COM and feet
+        #     com_traj = extract_com_from_trajectory(robot, traj_q, 0, len(traj_q))
+        #     lf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "left_foot_link")
+        #     rf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "right_foot_link")
         
-            # Plot
-            fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-            fig.suptitle(f"COM Trajectory - Sample {i+1}, Successful #{successful_samples}", fontsize=14, fontweight='bold')
-            time_steps = np.arange(len(com_traj))
+        #     # Plot
+        #     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        #     fig.suptitle(f"COM Trajectory - Sample {i+1}, Successful #{successful_samples}", fontsize=14, fontweight='bold')
+        #     time_steps = np.arange(len(com_traj))
         
-            # XY plane
-            ax = axes[0, 0]
-            ax.plot(com_traj[:, 0], com_traj[:, 1], 'b-', linewidth=2, label='COM')
-            ax.plot(lf_traj[:, 0], lf_traj[:, 1], 'r--', linewidth=2, label='Left Foot')
-            ax.plot(rf_traj[:, 0], rf_traj[:, 1], 'g--', linewidth=2, label='Right Foot')
-            ax.set_xlabel('X (m)')
-            ax.set_ylabel('Y (m)')
-            ax.set_title('Top-Down View')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-            ax.axis('equal')
+        #     # XY plane
+        #     ax = axes[0, 0]
+        #     ax.plot(com_traj[:, 0], com_traj[:, 1], 'b-', linewidth=2, label='COM')
+        #     ax.plot(lf_traj[:, 0], lf_traj[:, 1], 'r--', linewidth=2, label='Left Foot')
+        #     ax.plot(rf_traj[:, 0], rf_traj[:, 1], 'g--', linewidth=2, label='Right Foot')
+        #     ax.set_xlabel('X (m)')
+        #     ax.set_ylabel('Y (m)')
+        #     ax.set_title('Top-Down View')
+        #     ax.legend()
+        #     ax.grid(True, alpha=0.3)
+        #     ax.axis('equal')
         
-            # Y position (lateral lean)
-            ax = axes[1, 0]
-            ax.plot(time_steps, com_traj[:, 1], 'b-', linewidth=2.5, label='COM Y')
-            ax.plot(time_steps, lf_traj[:, 1], 'r--', linewidth=1.5, alpha=0.7, label='LF Y')
-            ax.plot(time_steps, rf_traj[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='RF Y')
-            ax.fill_between(time_steps, lf_traj[:, 1], rf_traj[:, 1], alpha=0.1, color='gray')
-            ax.set_xlabel('Time Step')
-            ax.set_ylabel('Y Position (m)')
-            ax.set_title('Lateral Lean (CRITICAL)')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
+        #     # Y position (lateral lean)
+        #     ax = axes[1, 0]
+        #     ax.plot(time_steps, com_traj[:, 1], 'b-', linewidth=2.5, label='COM Y')
+        #     ax.plot(time_steps, lf_traj[:, 1], 'r--', linewidth=1.5, alpha=0.7, label='LF Y')
+        #     ax.plot(time_steps, rf_traj[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='RF Y')
+        #     ax.fill_between(time_steps, lf_traj[:, 1], rf_traj[:, 1], alpha=0.1, color='gray')
+        #     ax.set_xlabel('Time Step')
+        #     ax.set_ylabel('Y Position (m)')
+        #     ax.set_title('Lateral Lean (CRITICAL)')
+        #     ax.legend()
+        #     ax.grid(True, alpha=0.3)
         
-            # Z position (height)
-            ax = axes[1, 1]
-            ax.plot(time_steps, com_traj[:, 2], 'b-', linewidth=2, label='COM Z')
-            ax.plot(time_steps, lf_traj[:, 2], 'r--', linewidth=1.5, alpha=0.7, label='LF Z')
-            ax.plot(time_steps, rf_traj[:, 2], 'g--', linewidth=1.5, alpha=0.7, label='RF Z')
-            ax.set_xlabel('Time Step')
-            ax.set_ylabel('Height (m)')
-            ax.set_title('Vertical Motion')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
+        #     # Z position (height)
+        #     ax = axes[1, 1]
+        #     ax.plot(time_steps, com_traj[:, 2], 'b-', linewidth=2, label='COM Z')
+        #     ax.plot(time_steps, lf_traj[:, 2], 'r--', linewidth=1.5, alpha=0.7, label='LF Z')
+        #     ax.plot(time_steps, rf_traj[:, 2], 'g--', linewidth=1.5, alpha=0.7, label='RF Z')
+        #     ax.set_xlabel('Time Step')
+        #     ax.set_ylabel('Height (m)')
+        #     ax.set_title('Vertical Motion')
+        #     ax.legend()
+        #     ax.grid(True, alpha=0.3)
         
-            # X position
-            ax = axes[0, 1]
-            ax.plot(time_steps, com_traj[:, 0], 'b-', linewidth=2, label='COM X')
-            ax.plot(time_steps, lf_traj[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='LF X')
-            ax.plot(time_steps, rf_traj[:, 0], 'g--', linewidth=1.5, alpha=0.7, label='RF X')
-            ax.set_xlabel('Time Step')
-            ax.set_ylabel('X Position (m)')
-            ax.set_title('Forward/Backward Motion')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
+        #     # X position
+        #     ax = axes[0, 1]
+        #     ax.plot(time_steps, com_traj[:, 0], 'b-', linewidth=2, label='COM X')
+        #     ax.plot(time_steps, lf_traj[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='LF X')
+        #     ax.plot(time_steps, rf_traj[:, 0], 'g--', linewidth=1.5, alpha=0.7, label='RF X')
+        #     ax.set_xlabel('Time Step')
+        #     ax.set_ylabel('X Position (m)')
+        #     ax.set_title('Forward/Backward Motion')
+        #     ax.legend()
+        #     ax.grid(True, alpha=0.3)
         
-            plt.tight_layout()
-            plot_file = f"com_trajectory_sample_{i+1:04d}_success_{successful_samples:04d}.png"
-            plt.savefig(plot_file, dpi=150, bbox_inches='tight')
-            print(f"  Saved: {plot_file}")
-            plt.close(fig)
+        #     plt.tight_layout()
+        #     plot_file = f"com_trajectory_sample_{i+1:04d}_success_{successful_samples:04d}.png"
+        #     plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+        #     print(f"  Saved: {plot_file}")
+        #     plt.close(fig)
 
     # Remove last element (it's one past the end)
     traj_starts = traj_starts[:-1]
@@ -1026,6 +1068,8 @@ def main():
     print(f"Successful trajectories: {successful_samples}/{len(grid_samples)}")
     print(f"Total timesteps: {len(q)}")
     print(f"Output file: {OUTPUT_FILE}")
+    if CHECKPOINT_FREQUENCY > 0:
+        print(f"Checkpoints saved every {CHECKPOINT_FREQUENCY} trajectories")
     print(f"Grid configuration: {GRID_X_STEPS}x{GRID_Y_STEPS}x{GRID_YAW_STEPS} (x × y × yaw)")
     print(f"Step height: {STEP_HEIGHT:.2f} m")
     print(f"Wait time range (before & after): {WAIT_TIME_RANGE[0]:.2f} - {WAIT_TIME_RANGE[1]:.2f} s")
@@ -1046,18 +1090,18 @@ def main():
     print(f"  traj_dt:       {TIME_STEP:.6f} (time step)")
     print("=" * 80)
 
-    # Plot random trajectory COM
-    if successful_samples > 0:
-        print("\nPlotting random trajectory COM...")
-        random_traj_idx = np.random.randint(0, len(traj))
-        traj_start = traj[random_traj_idx]
-        traj_end = traj[random_traj_idx + 1] if random_traj_idx + 1 < len(traj) else len(q)
+    # # Plot random trajectory COM
+    # if successful_samples > 0:
+    #     print("\nPlotting random trajectory COM...")
+    #     random_traj_idx = np.random.randint(0, len(traj))
+    #     traj_start = traj[random_traj_idx]
+    #     traj_end = traj[random_traj_idx + 1] if random_traj_idx + 1 < len(traj) else len(q)
     
-        fig = plot_com_trajectory(robot, q, traj_start, traj_end, random_traj_idx)
-        plot_filename = f"com_trajectory_random_traj_{random_traj_idx}.png"
-        plt.savefig(plot_filename, dpi=150, bbox_inches='tight')
-        print(f"Saved random trajectory plot: {plot_filename}")
-        plt.close(fig)
+    #     fig = plot_com_trajectory(robot, q, traj_start, traj_end, random_traj_idx)
+    #     plot_filename = f"com_trajectory_random_traj_{random_traj_idx}.png"
+    #     plt.savefig(plot_filename, dpi=150, bbox_inches='tight')
+    #     print(f"Saved random trajectory plot: {plot_filename}")
+    #     plt.close(fig)
 
 
 if __name__ == "__main__":
