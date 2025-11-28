@@ -37,13 +37,13 @@ except ImportError:
 # Configuration
 OUTPUT_FILE = "stepping_dataset.npz"
 TIME_STEP = 0.02
-STEP_KNOTS = 13
-SUPPORT_KNOTS = 4
+STEP_KNOTS = 25
+SUPPORT_KNOTS = 25  # Increased from 10 for smoother and more accurate COM transitions
 WITHDISPLAY = False
 CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
 
 # Step generation parameters
-STEP_HEIGHT = 0.15  # Step height in meters
+STEP_HEIGHT = 0.125  # Step height in meters
 WAIT_TIME_RANGE = (0.5, 0.7)  # Waiting period before step (seconds)
 MID_WAIT_TIME_RANGE = (0.3, 0.6)  # Waiting period between two steps (seconds)
 # Grid sampling parameters
@@ -56,8 +56,8 @@ Y_OFFSET = 0.15
 YAW_STEP_UNIT = 0.1
 
 # Solver parameters
-MAX_ITERATIONS = 250  # Reduced to avoid divergence
-SOLVER_THRESHOLD = 1e-7  # Relaxed threshold to exit early
+MAX_ITERATIONS = 300  # Increased for better convergence with higher accuracy requirements
+SOLVER_THRESHOLD = 1e-4  # Tightened threshold for more precise solutions
 
 
 def get_memory_usage():
@@ -365,7 +365,7 @@ def generate_waiting_frames(robot, gait, x0, num_frames, left_target, right_targ
         #detect the previous cmd_stance, if next stance foot is left, the previous foot is right
         cmd_stance_data[i, 0] = 1 if stance_is_left else 0
 
-    print("while waiting, stance foot:", cmd_stance_data[0,0])
+    # print("while waiting, stance foot:", cmd_stance_data[0,0])
 
     return {
         "q": q_data,
@@ -390,6 +390,7 @@ def extract_trajectory_data(robot, solver, gait, left_target, right_target, yaw_
         dict with keys: q, qd, T_blf, T_brf, T_stsw, p_wcom, T_wbase, v_b, cmd_footstep, cmd_stance, cmd_countdown
     """
     T = len(solver.xs)
+    # print(T)
     nq = robot.model.nq
     nv = robot.model.nv
 
@@ -569,6 +570,23 @@ def extract_feet_from_trajectory(robot, q_trajectory, start_idx, end_idx, foot_f
         foot_trajectory.append(foot_pos)
 
     return np.array(foot_trajectory)
+
+
+def extract_foot_velocity_from_trajectory(foot_positions, dt):
+    """
+    Compute foot velocity in world frame from position trajectory.
+
+    Args:
+        foot_positions: (N, 3) array of foot positions in world frame
+        dt: time step between frames
+
+    Returns:
+        (N, 3) array of velocities. First velocity is zero (no previous frame).
+    """
+    velocities = np.zeros_like(foot_positions)
+    # Compute finite difference for velocity
+    velocities[1:] = np.diff(foot_positions, axis=0) / dt
+    return velocities
 
 
 def save_checkpoint(checkpoint_num, all_q, all_qd, all_T_blf, all_T_brf, all_T_stsw,
@@ -956,23 +974,31 @@ def main():
         #     print(f"  [Memory after GC] {current_memory:.2f} MB (Δ{memory_delta:+.2f} MB)")
 
         # # Optionally plot this trajectory (every Nth sample to avoid too many plots)
-        # if successful_samples % 10 == 0:  # Plot every 10th successful sample
+        # if successful_samples % 5 == 0:  # Plot every 5th successful sample
         #     print(f"  Plotting trajectory {successful_samples}...")
         #     # Combine all data for this trajectory
         #     traj_q = np.vstack([
         #         wait_data_before["q"], step1_data["q"], wait_data_mid["q"],
         #         step2_data["q"], wait_data_after["q"]
         #     ])
+        #     traj_v_b = np.vstack([
+        #         wait_data_before["v_b"], step1_data["v_b"], wait_data_mid["v_b"],
+        #         step2_data["v_b"], wait_data_after["v_b"]
+        #     ])
         #     # Extract COM and feet
         #     com_traj = extract_com_from_trajectory(robot, traj_q, 0, len(traj_q))
         #     lf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "left_foot_link")
         #     rf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "right_foot_link")
-        
+
+        #     # Compute foot velocities in world frame
+        #     lf_vel = extract_foot_velocity_from_trajectory(lf_traj, TIME_STEP)
+        #     rf_vel = extract_foot_velocity_from_trajectory(rf_traj, TIME_STEP)
+
         #     # Plot
-        #     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        #     fig.suptitle(f"COM Trajectory - Sample {i+1}, Successful #{successful_samples}", fontsize=14, fontweight='bold')
+        #     fig, axes = plt.subplots(4, 2, figsize=(14, 18))
+        #     fig.suptitle(f"Trajectory Analysis - Sample {i+1}, Successful #{successful_samples}", fontsize=14, fontweight='bold')
         #     time_steps = np.arange(len(com_traj))
-        
+
         #     # XY plane
         #     ax = axes[0, 0]
         #     ax.plot(com_traj[:, 0], com_traj[:, 1], 'b-', linewidth=2, label='COM')
@@ -984,7 +1010,7 @@ def main():
         #     ax.legend()
         #     ax.grid(True, alpha=0.3)
         #     ax.axis('equal')
-        
+
         #     # Y position (lateral lean)
         #     ax = axes[1, 0]
         #     ax.plot(time_steps, com_traj[:, 1], 'b-', linewidth=2.5, label='COM Y')
@@ -996,7 +1022,7 @@ def main():
         #     ax.set_title('Lateral Lean (CRITICAL)')
         #     ax.legend()
         #     ax.grid(True, alpha=0.3)
-        
+
         #     # Z position (height)
         #     ax = axes[1, 1]
         #     ax.plot(time_steps, com_traj[:, 2], 'b-', linewidth=2, label='COM Z')
@@ -1007,7 +1033,7 @@ def main():
         #     ax.set_title('Vertical Motion')
         #     ax.legend()
         #     ax.grid(True, alpha=0.3)
-        
+
         #     # X position
         #     ax = axes[0, 1]
         #     ax.plot(time_steps, com_traj[:, 0], 'b-', linewidth=2, label='COM X')
@@ -1018,9 +1044,63 @@ def main():
         #     ax.set_title('Forward/Backward Motion')
         #     ax.legend()
         #     ax.grid(True, alpha=0.3)
-        
+
+        #     # Left foot velocity (world frame)
+        #     ax = axes[2, 0]
+        #     lf_vel_norm = np.linalg.norm(lf_vel, axis=1)
+        #     ax.plot(time_steps, lf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='LF Vel X')
+        #     ax.plot(time_steps, lf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='LF Vel Y')
+        #     ax.plot(time_steps, lf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='LF Vel Z')
+        #     ax.plot(time_steps, lf_vel_norm, 'k-', linewidth=2, label='LF Vel Norm')
+        #     ax.set_xlabel('Time Step')
+        #     ax.set_ylabel('Velocity (m/s)')
+        #     ax.set_title('Left Foot Velocity (World Frame)')
+        #     ax.legend()
+        #     ax.grid(True, alpha=0.3)
+
+        #     # Right foot velocity (world frame)
+        #     ax = axes[2, 1]
+        #     rf_vel_norm = np.linalg.norm(rf_vel, axis=1)
+        #     ax.plot(time_steps, rf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='RF Vel X')
+        #     ax.plot(time_steps, rf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='RF Vel Y')
+        #     ax.plot(time_steps, rf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='RF Vel Z')
+        #     ax.plot(time_steps, rf_vel_norm, 'k-', linewidth=2, label='RF Vel Norm')
+        #     ax.set_xlabel('Time Step')
+        #     ax.set_ylabel('Velocity (m/s)')
+        #     ax.set_title('Right Foot Velocity (World Frame)')
+        #     ax.legend()
+        #     ax.grid(True, alpha=0.3)
+
+        #     # Base linear velocity (base frame)
+        #     ax = axes[3, 0]
+        #     base_vel_linear = traj_v_b[:, :3]
+        #     base_vel_linear_norm = np.linalg.norm(base_vel_linear, axis=1)
+        #     ax.plot(time_steps, base_vel_linear[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base Vel X')
+        #     ax.plot(time_steps, base_vel_linear[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base Vel Y')
+        #     ax.plot(time_steps, base_vel_linear[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base Vel Z')
+        #     ax.plot(time_steps, base_vel_linear_norm, 'k-', linewidth=2, label='Base Vel Norm')
+        #     ax.set_xlabel('Time Step')
+        #     ax.set_ylabel('Velocity (m/s)')
+        #     ax.set_title('Base Linear Velocity (Base Frame)')
+        #     ax.legend()
+        #     ax.grid(True, alpha=0.3)
+
+        #     # Base angular velocity (base frame)
+        #     ax = axes[3, 1]
+        #     base_vel_angular = traj_v_b[:, 3:]
+        #     base_vel_angular_norm = np.linalg.norm(base_vel_angular, axis=1)
+        #     ax.plot(time_steps, base_vel_angular[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base ω X')
+        #     ax.plot(time_steps, base_vel_angular[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base ω Y')
+        #     ax.plot(time_steps, base_vel_angular[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base ω Z')
+        #     ax.plot(time_steps, base_vel_angular_norm, 'k-', linewidth=2, label='Base ω Norm')
+        #     ax.set_xlabel('Time Step')
+        #     ax.set_ylabel('Angular Velocity (rad/s)')
+        #     ax.set_title('Base Angular Velocity (Base Frame)')
+        #     ax.legend()
+        #     ax.grid(True, alpha=0.3)
+
         #     plt.tight_layout()
-        #     plot_file = f"com_trajectory_sample_{i+1:04d}_success_{successful_samples:04d}.png"
+        #     plot_file = f"velocity_sample_{successful_samples}.png"
         #     plt.savefig(plot_file, dpi=150, bbox_inches='tight')
         #     print(f"  Saved: {plot_file}")
         #     plt.close(fig)
