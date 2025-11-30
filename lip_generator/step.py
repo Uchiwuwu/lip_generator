@@ -62,7 +62,7 @@ class SimpleBipedGaitProblem:
         print(f"[Collision Avoidance] Enabled with min distance: {self.collision_min_distance}m")
 
     def createSingleStepProblem(
-        self, x0, leftFootTarget, rightFootTarget, timeStep, stepKnots, supportKnots, stepHeight=0.10, targetYaw=0.0
+        self, x0, leftFootTarget, rightFootTarget, timeStep, stepKnots, supportKnots, stepHeight=0.10, targetYaw=0.0, transitionKnots=None, comShiftRatio=0.8, initialComShift=0.8
     ):
         """Create a shooting problem for a single step with specified foot locations.
 
@@ -74,8 +74,14 @@ class SimpleBipedGaitProblem:
         :param supportKnots: number of knots for double support phases
         :param stepHeight: height of foot swing trajectory (default: 0.10m)
         :param targetYaw: target yaw angle for swing foot (default: 0.0 rad)
+        :param transitionKnots: number of knots for post-swing COM centering phase (default: same as supportKnots)
+        :param comShiftRatio: ratio of COM shift towards center during swing (default: 0.8 = 80%)
+        :param initialComShift: ratio of COM shift towards stance foot in initial phase (default: 0.8 = 80%)
         :return shooting problem
         """
+        # Default transitionKnots to supportKnots if not specified
+        if transitionKnots is None:
+            transitionKnots = supportKnots
         # Compute the current foot positions
         q0 = x0[: self.state.nq]
         pinocchio.forwardKinematics(self.rmodel, self.rdata, q0)
@@ -113,8 +119,8 @@ class SimpleBipedGaitProblem:
             self.createSwingFootModel(
                 timeStep,
                 [self.rfId, self.lfId],
-                comTask=com_initial_center + (com_initial_target - com_initial_center) * 0.8 * ((k + 1) / supportKnots),
-                comWeight=1e7
+                comTask=com_initial_center + (com_initial_target - com_initial_center) * initialComShift * ((k + 1) / supportKnots),
+                comWeight=5e6
             )
             for k in range(supportKnots)
         ]
@@ -133,20 +139,30 @@ class SimpleBipedGaitProblem:
                 [self.rfId],  # right foot supports
                 [self.lfId],  # left foot swings
                 targetYaw,
-                comWeight=1e6,  # Increased for better balance
+                comShiftRatio,
             )
             loco3dModel += lStep
 
-            # Add terminal model with COM centered between feet
-            com_final = (leftFootTarget + rfPos0) / 2
-            com_final[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
-            terminal_model = self.createSwingFootModel(
-                timeStep,
-                [self.rfId, self.lfId],  # Both feet in support
-                comTask=com_final,
-                comWeight=1e7
-            )
-            loco3dModel.append(terminal_model)
+            # Update CoM reference
+            comRef = (leftFootTarget + rfPos0) / 2
+            comRef[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
+
+            # Add transition double support - gradually shift COM towards support foot (right foot)
+            # Shift 50% towards the support foot for stability without excessive movement
+            com_center = comRef.copy()
+            com_support = rfPos0.copy()
+            com_support[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
+
+            doubleSupport_transition = [
+                self.createSwingFootModel(
+                    timeStep,
+                    [self.rfId, self.lfId],
+                    comTask=com_center + (com_support - com_center) * 0.0 * ((k + 1) / transitionKnots),
+                    comWeight=1e7
+                )
+                for k in range(transitionKnots)
+            ]
+            loco3dModel += doubleSupport_transition
 
             # # Move right foot if needed
             # if rightFootMovement > 1e-3:
@@ -174,20 +190,30 @@ class SimpleBipedGaitProblem:
                 [self.lfId],  # left foot supports
                 [self.rfId],  # right foot swings
                 targetYaw,
-                comWeight=1e6,  # Increased for better balance
+                comShiftRatio,
             )
             loco3dModel += rStep
 
-            # Add terminal model with COM centered between feet
-            com_final = (rightFootTarget + lfPos0) / 2
-            com_final[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
-            terminal_model = self.createSwingFootModel(
-                timeStep,
-                [self.rfId, self.lfId],  # Both feet in support
-                comTask=com_final,
-                comWeight=1e7
-            )
-            loco3dModel.append(terminal_model)
+            # Update CoM reference
+            comRef = (leftFootTarget + rightFootTarget) / 2
+            comRef[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
+
+            # Add transition double support - gradually shift COM towards support foot (left foot)
+            # Shift 50% towards the support foot for stability without excessive movement
+            com_center = comRef.copy()
+            com_support = lfPos0.copy()
+            com_support[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
+
+            doubleSupport_transition = [
+                self.createSwingFootModel(
+                    timeStep,
+                    [self.rfId, self.lfId],
+                    comTask=com_center + (com_support - com_center) * 0.0 * ((k + 1) / transitionKnots),
+                    comWeight=1e7
+                )
+                for k in range(transitionKnots)
+            ]
+            loco3dModel += doubleSupport_transition
 
             # # Move left foot if needed
             # if leftFootMovement > 1e-3:
@@ -203,6 +229,22 @@ class SimpleBipedGaitProblem:
             #         targetYaw,
             #     )
             #     loco3dModel += lStep
+
+        # Final double support phase - keep COM at center between final feet
+        # Since transition doesn't shift anymore, COM is already centered
+        com_final = (leftFootTarget + rightFootTarget) / 2
+        com_final[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
+
+        doubleSupport_final = [
+            self.createSwingFootModel(
+                timeStep,
+                [self.rfId, self.lfId],
+                comTask=com_final,
+                comWeight=5e6
+            )
+            for k in range(transitionKnots)
+        ]
+        loco3dModel += doubleSupport_final
 
         return crocoddyl.ShootingProblem(x0, loco3dModel[:-1], loco3dModel[-1])
 
@@ -283,7 +325,7 @@ class SimpleBipedGaitProblem:
         supportFootIds,
         swingFootIds,
         targetYaw=0.0,
-        comWeight=1e5,
+        comShiftRatio=0.8,
     ):
         """Action models for a footstep phase with explicit target position.
 
@@ -296,12 +338,9 @@ class SimpleBipedGaitProblem:
         :param supportFootIds: Ids of the supporting feet
         :param swingFootIds: Ids of the swinging foot
         :param targetYaw: target yaw angle for the swinging foot (default: 0.0 rad)
-        :param comWeight: weight for COM tracking during swing (default: 1e5, higher for better balance)
+        :param comShiftRatio: ratio of COM shift towards center during swing (default: 0.8 = 80%)
         :return footstep action models
         """
-        numLegs = len(supportFootIds) + len(swingFootIds)
-        comPercentage = float(len(swingFootIds)) / numLegs
-
         # Convert to numpy arrays
         footPos0 = np.array(footPos0)
         footTarget = np.array(footTarget)
@@ -309,30 +348,36 @@ class SimpleBipedGaitProblem:
         # Compute total displacement
         displacement = footTarget - footPos0
 
+        # Get stance foot position (for COM calculation)
+        # Assume the stance foot position is available from the robot data
+        stance_foot_pos = self.rdata.oMf[supportFootIds[0]].translation.copy()
+
+        # Calculate target center of support (between stance foot and landing position)
+        target_center = (stance_foot_pos + footTarget) / 2
+        target_center[2] = comPos0[2]  # Keep same height
+
+        # COM should shift towards target center based on the specified ratio
+        com_shift_amount = comShiftRatio
+
         # Action models for the foot swing
         footSwingModel = []
         for k in range(numKnots):
             swingFootTask = []
             for i in swingFootIds:
                 # Create smooth trajectory from footPos0 to footTarget
-                # Phase 1 (first 40%): swing up
-                # Phase 2 (last 60%): swing down (longer for gentler landing)
-                upPhaseKnots = numKnots * 0.4  # 40% of time for swing up
+                # Phase 1 (first half): swing up
+                # Phase 2 (second half): swing down
+                phKnots = numKnots / 2
                 progress = (k + 1) / numKnots  # Linear progress from 0 to 1
 
-                if k < upPhaseKnots:
-                    # Swing up phase (faster)
+                if k < phKnots:
+                    # Swing up phase
                     xy_progress = progress
-                    z_height = stepHeight * (k / upPhaseKnots)
+                    z_height = stepHeight * (k / phKnots)
                 else:
-                    # Swing down phase (slower, gentler)
+                    # Swing down phase
                     xy_progress = progress
-                    down_progress = float(k - upPhaseKnots) / (numKnots - upPhaseKnots)
-                    # z_height = stepHeight * (1 - down_progress)** 2
-                    # z_height = stepHeight * (1 - down_progress)** 3
-                    # z_height = stepHeight * (1 - down_progress)** 4
-                    z_height = stepHeight * np.exp(-3 *down_progress)
-                    # z_height = stepHeight * (1 -3*down_progress**2 + 2*down_progress**3)
+                    z_height = stepHeight * (1 - float(k - phKnots) / phKnots)
 
                 # Interpolate x,y position
                 tref = footPos0 + displacement * xy_progress
@@ -352,8 +397,10 @@ class SimpleBipedGaitProblem:
 
                 swingFootTask += [[i, pinocchio.SE3(R_target, tref)]]
 
-            # Update CoM task
-            comTask = displacement[:2] * progress * comPercentage + comPos0[:2]
+            # Update CoM task - shift 80% towards center of stance and landing feet
+            # comPos0 is initial COM, target_center is the center between stance and landing
+            com_displacement = target_center[:2] - comPos0[:2]
+            comTask = comPos0[:2] + com_displacement * progress * com_shift_amount
             comTask = np.array([comTask[0], comTask[1], comPos0[2]])
 
             footSwingModel += [
@@ -362,13 +409,11 @@ class SimpleBipedGaitProblem:
                     supportFootIds,
                     comTask=comTask,
                     swingFootTask=swingFootTask,
-                    comWeight=comWeight,
-                    footWeight=5e7
+                    footWeight=8e6
                 )
             ]
 
         # Action model for the foot switch (landing)
-        # Use pseudoImpulse=True for smoother landings with velocity penalties
         footSwitchModel = self.createFootSwitchModel(
             swingFootIds, swingFootTask
         )
@@ -443,7 +488,6 @@ class SimpleBipedGaitProblem:
                 )
             ]
         # Action model for the foot switch
-        # Use pseudoImpulse=True for smoother landings with velocity penalties
         footSwitchModel = self.createFootSwitchModel(
             swingFootIds, swingFootTask
         )
@@ -554,14 +598,9 @@ class SimpleBipedGaitProblem:
                     except:
                         pass  # Skip if not supported
 
-        # State weights: [pos(3), orient(3), joints(nv-6), velocities(nv)]
-        # For velocities: base_linear(3), base_angular(3), joint_velocities(nv-6)
-        # High weights on base velocities for smoothness, lower on joint velocities for swing
-        # Angular velocity: [roll, pitch, yaw] - roll and pitch need highest weights for stability
-        # Higher joint position weight (0.1) keeps arms and upper body closer to default pose
         stateWeights = np.array(
-            [0] * 3 + [500.0] * 3 + [0.1] * (self.state.nv - 6) +
-            [200] * 3 + [5000, 5000, 1000] + [10] * (self.state.nv - 6)  # base_vel, [roll, pitch, yaw], joint_vel
+            [0] * 3 + [500.0] * 3 + [0.01] *
+            (self.state.nv - 6) + [10] * self.state.nv
         )
         stateResidual = crocoddyl.ResidualModelState(
             self.state, self.rmodel.defaultState, nu
@@ -700,21 +739,18 @@ class SimpleBipedGaitProblem:
                 )
                 costModel.addCost(
                     self.rmodel.frames[i[0]].name +
-                    "_footTrack", footTrack, 1e5
+                    "_footTrack", footTrack, 1e8
                 )
                 costModel.addCost(
                     self.rmodel.frames[i[0]].name + "_impulseVel",
                     impulseFootVelCost,
-                    1e5,
+                    1e6,
                 )
-        # State weights for impulse: higher base velocity weights for smooth landing
-        # Angular velocity: [roll, pitch, yaw] - extremely high on roll/pitch for stable landing
-        # Higher joint position weight keeps arms stationary during landing
         stateWeights = np.array(
             [0.0] * 3
             + [500.0] * 3
-            + [0.1] * (self.state.nv - 6)
-            + [500] * 3 + [10000, 10000, 2000] + [200] * (self.state.nv - 6)  # base_vel, [roll, pitch, yaw], joint_vel
+            + [0.01] * (self.state.nv - 6)
+            + [10] * self.state.nv
         )
         stateResidual = crocoddyl.ResidualModelState(
             self.state, self.rmodel.defaultState, nu

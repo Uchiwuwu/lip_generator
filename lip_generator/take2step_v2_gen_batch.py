@@ -39,6 +39,9 @@ OUTPUT_FILE = "stepping_dataset.npz"
 TIME_STEP = 0.02
 STEP_KNOTS = 25
 SUPPORT_KNOTS = 25  # Increased from 10 for smoother and more accurate COM transitions
+TRANSITION_KNOTS = 10  # Knots for post-swing COM centering phase
+COM_SHIFT_RATIO = 0.7  # Ratio of COM shift towards center during swing (0.8 = 80%)
+INITIAL_COM_SHIFT = 0.8  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
 WITHDISPLAY = False
 CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
 
@@ -247,7 +250,7 @@ def solve_stepping_problem(gait, x0, left_target, right_target, target_yaw=0.0, 
         if np.any(np.isnan(left_target)) or np.any(np.isnan(right_target)):
             return None, False
 
-        problem = gait.createSingleStepProblem(x0, left_target, right_target, TIME_STEP, STEP_KNOTS, SUPPORT_KNOTS, STEP_HEIGHT, target_yaw)
+        problem = gait.createSingleStepProblem(x0, left_target, right_target, TIME_STEP, STEP_KNOTS, SUPPORT_KNOTS, STEP_HEIGHT, target_yaw, TRANSITION_KNOTS, COM_SHIFT_RATIO, INITIAL_COM_SHIFT)
 
         solver = crocoddyl.SolverIntro(problem)
         solver.th_stop = SOLVER_THRESHOLD
@@ -974,7 +977,7 @@ def main():
         #     print(f"  [Memory after GC] {current_memory:.2f} MB (Δ{memory_delta:+.2f} MB)")
 
         # # Optionally plot this trajectory (every Nth sample to avoid too many plots)
-        # if successful_samples % 5 == 0:  # Plot every 5th successful sample
+        # if successful_samples % 2 == 0:  # Plot every 5th successful sample
         #     print(f"  Plotting trajectory {successful_samples}...")
         #     # Combine all data for this trajectory
         #     traj_q = np.vstack([
