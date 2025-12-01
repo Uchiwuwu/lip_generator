@@ -209,7 +209,7 @@ class SimpleBipedGaitProblem:
                     timeStep,
                     [self.rfId, self.lfId],
                     comTask=com_center + (com_support - com_center) * 0.0 * ((k + 1) / transitionKnots),
-                    comWeight=1e7
+                    comWeight=5e6
                 )
                 for k in range(transitionKnots)
             ]
