@@ -370,6 +370,31 @@ class SimpleBipedGaitProblem:
                 phKnots = numKnots / 2
                 progress = (k + 1) / numKnots  # Linear progress from 0 to 1
 
+                # QUINTIC TRAJECTORY WITH LANDING DAMPING (COMMENTED OUT - PRESERVE FOR FUTURE USE)
+                # # Swing up phase - use quintic polynomial for smooth z trajectory
+                # if k < phKnots:
+                #     xy_progress = progress
+                #     # Quintic basis: 10*t^3 - 15*t^4 + 6*t^5 (normalized to 0-1)
+                #     t = (k + 1) / phKnots  # Local phase progress 0 to 1
+                #     z_height = stepHeight * (10 * t**3 - 15 * t**4 + 6 * t**5)
+                # else:
+                #     # Swing down phase - use quintic polynomial with landing damping
+                #     # Apply stronger damping in final 30% of swing for softer landing
+                #     t = float(k - phKnots + 1) / phKnots  # Local phase progress 0 to 1
+                #     z_base = 1 - (10 * t**3 - 15 * t**4 + 6 * t**5)
+                #
+                #     # Add landing damping: reduce z_height more in final phase
+                #     # When t > 0.7 (last 30%), apply additional quadratic damping
+                #     if t > 0.7:
+                #         landing_phase = (t - 0.7) / 0.3  # Normalized 0 to 1 for landing phase
+                #         landing_damping = 1.0 - landing_phase**2  # Quadratic decay
+                #         z_height = stepHeight * z_base * landing_damping
+                #     else:
+                #         z_height = stepHeight * z_base
+                #
+                #     xy_progress = progress
+
+                # DEFAULT: Linear trajectory
                 if k < phKnots:
                     # Swing up phase
                     xy_progress = progress
@@ -409,7 +434,10 @@ class SimpleBipedGaitProblem:
                     supportFootIds,
                     comTask=comTask,
                     swingFootTask=swingFootTask,
-                    footWeight=8e6
+                    footWeight=5e7,
+                    progressRatio=progress,  # Pass current progress for landing damping
+                    landingDampingStart=0.5,  # Start damping at 70% of swing
+                    landingDampingWeight=5e5  # Base weight for velocity penalty
                 )
             ]
 
@@ -498,7 +526,8 @@ class SimpleBipedGaitProblem:
         return [*footSwingModel, footSwitchModel]
 
     def createSwingFootModel(
-        self, timeStep, supportFootIds, comTask=None, swingFootTask=None, comWeight=1e5, footWeight=1e6
+        self, timeStep, supportFootIds, comTask=None, swingFootTask=None, comWeight=1e5, footWeight=1e6,
+        progressRatio=None, landingDampingStart=0.7, landingDampingWeight=1e5
     ):
         """Action model for a swing foot phase.
 
@@ -508,6 +537,9 @@ class SimpleBipedGaitProblem:
         :param swingFootTask: swinging foot task
         :param comWeight: weight for COM tracking (default: 1e5, higher for double support)
         :param footWeight: weight for swing foot position tracking (default: 1e6, increase to improve reaching)
+        :param progressRatio: current progress in swing (0-1), used for landing damping
+        :param landingDampingStart: when to start landing damping (0-1, default 0.7 = 70%)
+        :param landingDampingWeight: weight for velocity penalty during landing phase (default: 1e5)
         :return action model for a swing foot phase
         """
         # Creating a 6D multi-contact model, and then including the supporting
@@ -564,6 +596,27 @@ class SimpleBipedGaitProblem:
                     "_footTrack", footTrack, footWeight
                 )
 
+                # PRE-LANDING VELOCITY DAMPING
+                # Apply stronger velocity penalty during landing phase for smoother deceleration
+                if progressRatio is not None and progressRatio > landingDampingStart:
+                    # Increase weight during landing phase (final 30% of swing)
+                    landing_phase = (progressRatio - landingDampingStart) / (1.0 - landingDampingStart)
+                    # Quadratic increase in damping: starts at base, peaks at landing
+                    adaptive_damping_weight = landingDampingWeight * (landing_phase ** 2)
+
+                    frameVelocityResidual = crocoddyl.ResidualModelFrameVelocity(
+                        self.state, i[0], pinocchio.Motion.Zero(),
+                        pinocchio.LOCAL_WORLD_ALIGNED, nu
+                    )
+                    velocityDampingCost = crocoddyl.CostModelResidual(
+                        self.state, frameVelocityResidual
+                    )
+                    costModel.addCost(
+                        self.rmodel.frames[i[0]].name + "_landingDamping",
+                        velocityDampingCost,
+                        adaptive_damping_weight
+                    )
+
         # Add collision avoidance between swing and stance feet
         # This prevents feet from getting too close during the swing phase
         if len(supportFootIds) > 0 and swingFootTask is not None:
@@ -598,9 +651,17 @@ class SimpleBipedGaitProblem:
                     except:
                         pass  # Skip if not supported
 
+        # State weights with increased penalty for upper body joints
+        # Upper body: torso(2) + left_arm(7) + right_arm(7) + head(1) = 17 joints at indices 6-22
+        num_upper_body = 17
+        num_leg_joints = self.state.nv - 6 - num_upper_body
+
         stateWeights = np.array(
-            [0] * 3 + [500.0] * 3 + [0.01] *
-            (self.state.nv - 6) + [10] * self.state.nv
+            [0] * 3 +                          # base position (free)
+            [500.0] * 3 +                      # base orientation
+            [10.0] * num_upper_body +           # upper body joints - HIGHER weight (1.0 instead of 0.01)
+            [0.01] * num_leg_joints +          # leg joints (normal 0.01)
+            [10] * self.state.nv               # velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
             self.state, self.rmodel.defaultState, nu
@@ -746,11 +807,16 @@ class SimpleBipedGaitProblem:
                     impulseFootVelCost,
                     1e6,
                 )
+        # State weights with increased penalty for upper body joints
+        num_upper_body = 17
+        num_leg_joints = self.state.nv - 6 - num_upper_body
+
         stateWeights = np.array(
-            [0.0] * 3
-            + [500.0] * 3
-            + [0.01] * (self.state.nv - 6)
-            + [10] * self.state.nv
+            [0.0] * 3 +                        # base position (free)
+            [500.0] * 3 +                      # base orientation
+            [10.0] * num_upper_body +           # upper body joints - HIGHER weight
+            [0.01] * num_leg_joints +          # leg joints (normal 0.01)
+            [10] * self.state.nv               # velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
             self.state, self.rmodel.defaultState, nu
@@ -830,8 +896,15 @@ class SimpleBipedGaitProblem:
                     self.rmodel.frames[i[0]].name +
                     "_footTrack", footTrack, 1e8
                 )
+        # State weights with increased penalty for upper body joints
+        num_upper_body = 17
+        num_leg_joints = self.rmodel.nv - 6 - num_upper_body
+
         stateWeights = np.array(
-            [1.0] * 6 + [0.1] * (self.rmodel.nv - 6) + [10] * self.rmodel.nv
+            [1.0] * 6 +                        # base (position + orientation)
+            [10.0] * num_upper_body +           # upper body joints - HIGHER weight
+            [0.1] * num_leg_joints +           # leg joints (0.1)
+            [10] * self.rmodel.nv              # velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
             self.state, self.rmodel.defaultState, 0

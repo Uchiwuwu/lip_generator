@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 from step import SimpleBipedGaitProblem
 import psutil
 import gc
+import os
 try:
     import meshcat
     import meshcat.transformations as tf
@@ -35,19 +36,20 @@ except ImportError:
     MESHCAT_AVAILABLE = False
 
 # Configuration
-OUTPUT_FILE = "stepping_dataset.npz"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_FILE = os.path.join(SCRIPT_DIR, "stepping_dataset.npz")
 TIME_STEP = 0.02
-STEP_KNOTS = 25
-SUPPORT_KNOTS = 25  # Increased from 10 for smoother and more accurate COM transitions
+STEP_KNOTS = 20
+SUPPORT_KNOTS = 20  # Increased from 10 for smoother and more accurate COM transitions
 TRANSITION_KNOTS = 10  # Knots for post-swing COM centering phase
 COM_SHIFT_RATIO = 0.7  # Ratio of COM shift towards center during swing (0.8 = 80%)
-INITIAL_COM_SHIFT = 0.8  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
+INITIAL_COM_SHIFT = 0.5  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
 WITHDISPLAY = False
 CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
 
 # Step generation parameters
 STEP_HEIGHT = 0.125  # Step height in meters
-WAIT_TIME_RANGE = (0.5, 0.7)  # Waiting period before step (seconds)
+WAIT_TIME_RANGE = (0.8, 1.0)  # Waiting period before step (seconds)
 MID_WAIT_TIME_RANGE = (0.3, 0.6)  # Waiting period between two steps (seconds)
 # Grid sampling parameters
 GRID_X_STEPS = 5  # Number of steps in x direction
@@ -313,12 +315,12 @@ def generate_waiting_frames(robot, gait, x0, num_frames, left_target, right_targ
 
     if left_movement > right_movement:
         stance_is_left = 0  # Right foot is stance
-        swing_target = lf_init
+        swing_target = left_target
         stance_foot_id = gait.rfId
         swing_foot_id = gait.lfId
     else:
         stance_is_left = 1  # Left foot is stance
-        swing_target = rf_init
+        swing_target = right_target
         stance_foot_id = gait.lfId
         swing_foot_id = gait.rfId
 
@@ -366,7 +368,7 @@ def generate_waiting_frames(robot, gait, x0, num_frames, left_target, right_targ
         T_wbase_data[i] = [body_pos[0], body_pos[1], body_pos[2], body_quat[3], body_quat[0], body_quat[1], body_quat[2]]
         cmd_footstep_data[i] = cmd_footstep
         #detect the previous cmd_stance, if next stance foot is left, the previous foot is right
-        cmd_stance_data[i, 0] = 1 if stance_is_left else 0
+        cmd_stance_data[i, 0] = 0 if stance_is_left else 1
 
     # print("while waiting, stance foot:", cmd_stance_data[0,0])
 
@@ -577,18 +579,30 @@ def extract_feet_from_trajectory(robot, q_trajectory, start_idx, end_idx, foot_f
 
 def extract_foot_velocity_from_trajectory(foot_positions, dt):
     """
-    Compute foot velocity in world frame from position trajectory.
+    Compute foot velocity in world frame from position trajectory using central differences.
 
     Args:
         foot_positions: (N, 3) array of foot positions in world frame
         dt: time step between frames
 
     Returns:
-        (N, 3) array of velocities. First velocity is zero (no previous frame).
+        (N, 3) array of velocities. Raw extraction without post-processing.
     """
     velocities = np.zeros_like(foot_positions)
-    # Compute finite difference for velocity
-    velocities[1:] = np.diff(foot_positions, axis=0) / dt
+
+    if len(foot_positions) < 2:
+        return velocities
+
+    # Forward difference for first point
+    velocities[0] = (foot_positions[1] - foot_positions[0]) / dt
+
+    # Central difference for interior points (smoother than backward difference)
+    if len(foot_positions) > 2:
+        velocities[1:-1] = (foot_positions[2:] - foot_positions[:-2]) / (2 * dt)
+
+    # Backward difference for last point
+    velocities[-1] = (foot_positions[-1] - foot_positions[-2]) / dt
+
     return velocities
 
 
@@ -596,7 +610,7 @@ def save_checkpoint(checkpoint_num, all_q, all_qd, all_T_blf, all_T_brf, all_T_s
                     all_p_wcom, all_T_wbase, all_v_b, all_cmd_footstep,
                     all_cmd_stance, all_cmd_countdown, traj_starts):
     """Save checkpoint of accumulated data."""
-    checkpoint_file = f"checkpoint_{checkpoint_num:04d}.npz"
+    checkpoint_file = os.path.join(SCRIPT_DIR, f"checkpoint_{checkpoint_num:04d}.npz")
 
     # Concatenate all data
     q = np.vstack(all_q)
@@ -691,6 +705,27 @@ def main():
     print("Stepping Motion Dataset Generator")
     print("=" * 80)
 
+    # Print configuration parameters
+    print("\n[Configuration Parameters]")
+    print(f"TIME_STEP: {TIME_STEP}")
+    print(f"STEP_KNOTS: {STEP_KNOTS}")
+    print(f"SUPPORT_KNOTS: {SUPPORT_KNOTS}")
+    print(f"TRANSITION_KNOTS: {TRANSITION_KNOTS}")
+    print(f"COM_SHIFT_RATIO: {COM_SHIFT_RATIO}")
+    print(f"INITIAL_COM_SHIFT: {INITIAL_COM_SHIFT}")
+    print(f"WITHDISPLAY: {WITHDISPLAY}")
+    print(f"CHECKPOINT_FREQUENCY: {CHECKPOINT_FREQUENCY}")
+    print(f"STEP_HEIGHT: {STEP_HEIGHT}")
+    print(f"WAIT_TIME_RANGE: {WAIT_TIME_RANGE}")
+    print(f"MID_WAIT_TIME_RANGE: {MID_WAIT_TIME_RANGE}")
+    print(f"GRID_X_STEPS: {GRID_X_STEPS}")
+    print(f"GRID_Y_STEPS: {GRID_Y_STEPS}")
+    print(f"GRID_YAW_STEPS: {GRID_YAW_STEPS}")
+    print(f"X_STEP_UNIT: {X_STEP_UNIT}")
+    print(f"Y_STEP_UNIT: {Y_STEP_UNIT}")
+    print(f"Y_OFFSET: {Y_OFFSET}")
+    print(f"YAW_STEP_UNIT: {YAW_STEP_UNIT}")
+
     # Load robot
     print("\n[1/4] Loading robot model...")
     robot = load_robot()
@@ -730,6 +765,11 @@ def main():
     grid_samples = generate_grid_samples(
         lfPos0, rfPos0, GRID_X_STEPS, GRID_Y_STEPS, GRID_YAW_STEPS, X_STEP_UNIT, Y_STEP_UNIT, Y_OFFSET, YAW_STEP_UNIT
     )
+    # Shuffle with a fixed seed for reproducibility
+    shuffle_seed = 42
+    np.random.seed(shuffle_seed)
+    shuffle_indices = np.random.permutation(len(grid_samples))
+    grid_samples = [grid_samples[i] for i in shuffle_indices]
     print(f"Total grid samples: {len(grid_samples)}")
 
     # Accumulate all trajectory data
@@ -747,6 +787,8 @@ def main():
     traj_starts = [0]  # First trajectory starts at index 0
 
     successful_samples = 0
+    left_foot_first_count = 0  # Count trajectories where left foot swings first
+    right_foot_first_count = 0  # Count trajectories where right foot swings first
     # initial_memory = get_memory_usage()
     # print(f"Initial memory usage: {initial_memory:.2f} MB")
 
@@ -843,6 +885,9 @@ def main():
             wait_data_mid = generate_waiting_frames(
                 robot, gait, state_after_step1, wait_frames_mid, lf_step2_target, rf_step2_target, step2_disp["target_yaw"]
             )
+            # Override cmd_footstep and cmd_stance to match the previous step (step1)
+            wait_data_mid["cmd_footstep"][:] = step1_data["cmd_footstep"][-1]
+            wait_data_mid["cmd_stance"][:] = step1_data["cmd_stance"][-1]
         except Exception as e:
             print(f"✗ Failed to generate wait_data_mid: {e}")
             continue
@@ -874,6 +919,9 @@ def main():
             wait_data_after = generate_waiting_frames(
                 robot, gait, final_state, wait_frames_after, lf_step2_target, rf_step2_target, step2_disp["target_yaw"]
             )
+            # Override cmd_footstep and cmd_stance to match the previous step (step2)
+            wait_data_after["cmd_footstep"][:] = step2_data["cmd_footstep"][-1]
+            wait_data_after["cmd_stance"][:] = step2_data["cmd_stance"][-1]
         except Exception as e:
             print(f"✗ Failed to generate wait_data_after: {e}")
             del solver2
@@ -954,6 +1002,13 @@ def main():
         traj_starts.append(current_length)
 
         successful_samples += 1
+
+        # Track which foot swings first
+        if step1["swing_foot"] == "left":
+            left_foot_first_count += 1
+        else:
+            right_foot_first_count += 1
+
         print(
             f"✓ Success! Wait before: {wait_frames_before}, Step1: {len(step1_data['q'])}, "
             + f"Wait mid: {wait_frames_mid}, Step2: {len(step2_data['q'])}, Wait after: {wait_frames_after}"
@@ -1103,7 +1158,7 @@ def main():
         #     ax.grid(True, alpha=0.3)
 
         #     plt.tight_layout()
-        #     plot_file = f"velocity_sample_{successful_samples}.png"
+        #     plot_file = os.path.join(SCRIPT_DIR, f"velocity_sample_{successful_samples}.png")
         #     plt.savefig(plot_file, dpi=150, bbox_inches='tight')
         #     print(f"  Saved: {plot_file}")
         #     plt.close(fig)
@@ -1149,6 +1204,8 @@ def main():
     print("Dataset Generation Complete!")
     print("=" * 80)
     print(f"Successful trajectories: {successful_samples}/{len(grid_samples)}")
+    print(f"  - Left foot first: {left_foot_first_count}")
+    print(f"  - Right foot first: {right_foot_first_count}")
     print(f"Total timesteps: {len(q)}")
     print(f"Output file: {OUTPUT_FILE}")
     if CHECKPOINT_FREQUENCY > 0:
@@ -1181,7 +1238,7 @@ def main():
     #     traj_end = traj[random_traj_idx + 1] if random_traj_idx + 1 < len(traj) else len(q)
     
     #     fig = plot_com_trajectory(robot, q, traj_start, traj_end, random_traj_idx)
-    #     plot_filename = f"com_trajectory_random_traj_{random_traj_idx}.png"
+    #     plot_filename = os.path.join(SCRIPT_DIR, f"com_trajectory_random_traj_{random_traj_idx}.png")
     #     plt.savefig(plot_filename, dpi=150, bbox_inches='tight')
     #     print(f"Saved random trajectory plot: {plot_filename}")
     #     plt.close(fig)
