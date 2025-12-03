@@ -596,7 +596,7 @@ class SimpleBipedGaitProblem:
                     "_footTrack", footTrack, footWeight
                 )
 
-                # PRE-LANDING VELOCITY DAMPING
+                # PRE-LANDING VELOCITY DAMPING - Z-AXIS ONLY
                 # Apply stronger velocity penalty during landing phase for smoother deceleration
                 if progressRatio is not None and progressRatio > landingDampingStart:
                     # Increase weight during landing phase (final 30% of swing)
@@ -608,11 +608,17 @@ class SimpleBipedGaitProblem:
                         self.state, i[0], pinocchio.Motion.Zero(),
                         pinocchio.LOCAL_WORLD_ALIGNED, nu
                     )
+
+                    # Weight only the z-axis (index 2) for linear velocity
+                    # Motion has 6 components: [linear_x, linear_y, linear_z, angular_x, angular_y, angular_z]
+                    velocity_weights = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+                    velocityActivation = crocoddyl.ActivationModelWeightedQuad(velocity_weights**2)
+
                     velocityDampingCost = crocoddyl.CostModelResidual(
-                        self.state, frameVelocityResidual
+                        self.state, velocityActivation, frameVelocityResidual
                     )
                     costModel.addCost(
-                        self.rmodel.frames[i[0]].name + "_landingDamping",
+                        self.rmodel.frames[i[0]].name + "_landingDamping_z",
                         velocityDampingCost,
                         adaptive_damping_weight
                     )
