@@ -54,11 +54,11 @@ MID_WAIT_TIME_RANGE = (0.3, 0.6)  # Waiting period between two steps (seconds)
 # Grid sampling parameters
 GRID_X_STEPS = 5  # Number of steps in x direction
 GRID_Y_STEPS = 3  # Number of steps in y direction
-GRID_YAW_STEPS = 3  # Number of steps in yaw direction
+GRID_YAW_STEPS = 5  # Number of steps in yaw direction
 X_STEP_UNIT = 0.1
 Y_STEP_UNIT = 0.05
 Y_OFFSET = 0.15
-YAW_STEP_UNIT = 0.1
+YAW_STEP_UNIT = 0.2
 
 # Solver parameters
 MAX_ITERATIONS = 300  # Increased for better convergence with higher accuracy requirements
@@ -356,8 +356,8 @@ def generate_waiting_frames(robot, gait, x0, num_frames, left_target, right_targ
     swing_stance_R = stance_R.T @ swing_R
     swing_stance_yaw = rotation_matrix_to_yaw(swing_stance_R)
 
-    # Footstep command
-    cmd_footstep = transform_to_stance_frame(swing_target, stance_pos, stance_R, swing_stance_yaw)
+    # Footstep command - use current swing position (not target) since feet are stationary during waiting
+    cmd_footstep = transform_to_stance_frame(swing_pos, stance_pos, stance_R, swing_stance_yaw)
 
     # Fill all frames with the same data
     for i in range(num_frames):
@@ -1032,7 +1032,7 @@ def main():
         #     print(f"  [Memory after GC] {current_memory:.2f} MB (Δ{memory_delta:+.2f} MB)")
 
         # # Optionally plot this trajectory (every Nth sample to avoid too many plots)
-        # if successful_samples % 2 == 0:  # Plot every 5th successful sample
+        # if successful_samples % 50 == 0:  # Plot every 5th successful sample
         #     print(f"  Plotting trajectory {successful_samples}...")
         #     # Combine all data for this trajectory
         #     traj_q = np.vstack([
