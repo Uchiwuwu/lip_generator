@@ -45,7 +45,7 @@ TRANSITION_KNOTS = 10  # Knots for post-swing COM centering phase
 COM_SHIFT_RATIO = 0.7  # Ratio of COM shift towards center during swing (0.8 = 80%)
 INITIAL_COM_SHIFT = 0.5  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
 WITHDISPLAY = False
-CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
+CHECKPOINT_FREQUENCY = 1  # Save checkpoint every N successful trajectories (0 to disable)
 
 # Step generation parameters
 STEP_HEIGHT = 0.125  # Step height in meters
@@ -54,7 +54,7 @@ MID_WAIT_TIME_RANGE = (0.3, 0.6)  # Waiting period between two steps (seconds)
 # Grid sampling parameters
 GRID_X_STEPS = 5  # Number of steps in x direction
 GRID_Y_STEPS = 3  # Number of steps in y direction
-GRID_YAW_STEPS = 5  # Number of steps in yaw direction
+GRID_YAW_STEPS = 3  # Number of steps in yaw direction
 X_STEP_UNIT = 0.1
 Y_STEP_UNIT = 0.05
 Y_OFFSET = 0.15
@@ -135,14 +135,15 @@ def rotation_matrix_to_yaw(R):
     return np.arctan2(R[1, 0], R[0, 0])
 
 
-def transform_to_stance_frame(target_pos, stance_pos, stance_R, target_yaw):
+def transform_to_stance_frame(target_pos, stance_pos, stance_R, swing_R):
     """
     Transform target position from world frame to stance foot frame.
 
     Args:
-        target_pos: [x, y, z] in world frame
+        target_pos: [x, y, z] swing foot position in world frame
         stance_pos: [x, y, z] stance foot position in world frame
-        stance_R: 3x3 rotation matrix of stance foot
+        stance_R: 3x3 rotation matrix of stance foot in world frame
+        swing_R: 3x3 rotation matrix of swing foot in world frame
 
     Returns:
         [x, y, z, yaw] in stance foot frame
@@ -151,7 +152,11 @@ def transform_to_stance_frame(target_pos, stance_pos, stance_R, target_yaw):
     p_world = target_pos - stance_pos
     p_stance = stance_R.T @ p_world
 
-    return np.array([p_stance[0], p_stance[1], 0.0, target_yaw])
+    # Compute yaw difference between swing and stance foot
+    swing_stance_R = stance_R.T @ swing_R
+    swing_stance_yaw = rotation_matrix_to_yaw(swing_stance_R)
+
+    return np.array([p_stance[0], p_stance[1], 0.0, swing_stance_yaw])
 
 
 def generate_grid_samples(
@@ -276,7 +281,7 @@ def solve_stepping_problem(gait, x0, left_target, right_target, target_yaw=0.0, 
         return None, False
 
 
-def generate_waiting_frames(robot, gait, x0, num_frames, left_target, right_target, yaw_target):
+def generate_waiting_frames(robot, gait, x0, num_frames, stance_foot):
     """
     Generate waiting frames where the robot stands still.
 
@@ -307,20 +312,12 @@ def generate_waiting_frames(robot, gait, x0, num_frames, left_target, right_targ
     pinocchio.forwardKinematics(robot.model, rdata, q)
     pinocchio.updateFramePlacements(robot.model, rdata)
 
-    lf_init = rdata.oMf[gait.lfId].translation.copy()
-    rf_init = rdata.oMf[gait.rfId].translation.copy()
-
-    left_movement = np.linalg.norm(left_target - lf_init)
-    right_movement = np.linalg.norm(right_target - rf_init)
-
-    if left_movement > right_movement:
+    if stance_foot:
         stance_is_left = 0  # Right foot is stance
-        swing_target = left_target
         stance_foot_id = gait.rfId
         swing_foot_id = gait.lfId
     else:
         stance_is_left = 1  # Left foot is stance
-        swing_target = right_target
         stance_foot_id = gait.lfId
         swing_foot_id = gait.rfId
 
@@ -356,8 +353,8 @@ def generate_waiting_frames(robot, gait, x0, num_frames, left_target, right_targ
     swing_stance_R = stance_R.T @ swing_R
     swing_stance_yaw = rotation_matrix_to_yaw(swing_stance_R)
 
-    # Footstep command - use current swing position (not target) since feet are stationary during waiting
-    cmd_footstep = transform_to_stance_frame(swing_pos, stance_pos, stance_R, swing_stance_yaw)
+    # Footstep command - use current swing position and rotation since feet are stationary during waiting
+    cmd_footstep = transform_to_stance_frame(swing_pos, stance_pos, stance_R, swing_R)
 
     # Fill all frames with the same data
     for i in range(num_frames):
@@ -387,7 +384,7 @@ def generate_waiting_frames(robot, gait, x0, num_frames, left_target, right_targ
     }
 
 
-def extract_trajectory_data(robot, solver, gait, left_target, right_target, yaw_target):
+def extract_trajectory_data(robot, solver, gait, left_target, right_target):
     """
     Extract trajectory data in required format.
 
@@ -420,6 +417,14 @@ def extract_trajectory_data(robot, solver, gait, left_target, right_target, yaw_
     lf_init = rdata.oMf[gait.lfId].translation.copy()
     rf_init = rdata.oMf[gait.rfId].translation.copy()
 
+    # Get final foot positions and rotations from last state
+    pinocchio.forwardKinematics(robot.model, rdata, solver.xs[-1][:nq])
+    pinocchio.updateFramePlacements(robot.model, rdata)
+    lf_final = rdata.oMf[gait.lfId].translation.copy()
+    rf_final = rdata.oMf[gait.rfId].translation.copy()
+    lf_final_R = rdata.oMf[gait.lfId].rotation.copy()
+    rf_final_R = rdata.oMf[gait.rfId].rotation.copy()
+
     left_movement = np.linalg.norm(left_target - lf_init)
     right_movement = np.linalg.norm(right_target - rf_init)
 
@@ -427,12 +432,14 @@ def extract_trajectory_data(robot, solver, gait, left_target, right_target, yaw_
     # If left foot moves more, left is swing, right is stance
     if left_movement > right_movement:
         stance_is_left = 0  # Right foot is stance
-        swing_target = left_target
+        swing_target = lf_final  # Use actual achieved position, not target
+        swing_target_R = lf_final_R  # Use actual achieved rotation
         stance_foot_id = gait.rfId
         swing_foot_id = gait.lfId
     else:
         stance_is_left = 1  # Left foot is stance
-        swing_target = right_target
+        swing_target = rf_final  # Use actual achieved position, not target
+        swing_target_R = rf_final_R  # Use actual achieved rotation
         stance_foot_id = gait.lfId
         swing_foot_id = gait.rfId
 
@@ -501,15 +508,21 @@ def extract_trajectory_data(robot, solver, gait, left_target, right_target, yaw_
         swing_stance_yaw = rotation_matrix_to_yaw(swing_stance_R)
         T_stsw_data[t] = np.array([swing_stance_pos[0], swing_stance_pos[1], swing_stance_pos[2], swing_stance_yaw])
 
-        # Compute cmd_footstep in stance frame
-        cmd_footstep_data[t] = transform_to_stance_frame(swing_target, stance_pos, stance_R, yaw_target)
+        # Compute cmd_footstep in stance frame using final swing foot position and rotation
+        cmd_footstep_data[t] = transform_to_stance_frame(swing_target, stance_pos, stance_R, swing_target_R)
 
         # Stance indicator
         cmd_stance_data[t, 0] = 0 if stance_is_left else 1
 
-        # Countdown: goes from 1 -> 0 uniformly throughout the step
-        progress = t / (T - 1) if T > 1 else 0
-        cmd_countdown_data[t, 0] = 1 - progress
+        # Countdown: goes from 1 -> 0 during support + step phases, then 0 during transition
+        # Support + Step phases: SUPPORT_KNOTS + STEP_KNOTS knots
+        # Transition phase: TRANSITION_KNOTS knots (countdown should be 0)
+        support_step_knots = SUPPORT_KNOTS + STEP_KNOTS
+        if t < support_step_knots:
+            progress = t / (support_step_knots - 1) if support_step_knots > 1 else 0
+            cmd_countdown_data[t, 0] = 1 - progress
+        else:
+            cmd_countdown_data[t, 0] = 0  # Transition phase: countdown is 0
 
     return {
         "q": q_data,
@@ -789,19 +802,8 @@ def main():
     successful_samples = 0
     left_foot_first_count = 0  # Count trajectories where left foot swings first
     right_foot_first_count = 0  # Count trajectories where right foot swings first
-    # initial_memory = get_memory_usage()
-    # print(f"Initial memory usage: {initial_memory:.2f} MB")
 
     for i, sample in enumerate(grid_samples):
-        # Recreate gait EVERY iteration to completely prevent state accumulation
-        del gait
-        gait = SimpleBipedGaitProblem(robot.model, rightFoot, leftFoot, fwddyn=False)
-
-        # Track memory for every sample
-        # current_memory = get_memory_usage()
-        # memory_delta = current_memory - initial_memory
-        # print(f"\n[Memory] Sample {i}: {current_memory:.2f} MB (Δ{memory_delta:+.2f} MB)")
-
         print(f"--- Sample {i + 1}/{len(grid_samples)} ---")
 
         step1 = sample["step1"]
@@ -814,11 +816,11 @@ def main():
         # Generate random waiting time and frames (before stepping)
         wait_time_before = np.random.uniform(WAIT_TIME_RANGE[0], WAIT_TIME_RANGE[1])
         wait_frames_before = int(wait_time_before / TIME_STEP)
-
+        first_stance = np.random.randint(2)
         # Generate waiting frames before first step
         try:
             wait_data_before = generate_waiting_frames(
-                robot, gait, x0, wait_frames_before, step1["left_target"], step1["right_target"], step1["target_yaw"]
+                robot, gait, x0, wait_frames_before, first_stance
             )
         except Exception as e:
             print(f"✗ Failed to generate wait_data_before: {e}")
@@ -838,7 +840,7 @@ def main():
 
         # Extract first step data
         try:
-            step1_data = extract_trajectory_data(robot, solver1, gait, step1["left_target"], step1["right_target"], step1["target_yaw"])
+            step1_data = extract_trajectory_data(robot, solver1, gait, step1["left_target"], step1["right_target"])
         except Exception as e:
             print(f"✗ Failed to extract step1 data: {e}")
             del solver1
@@ -879,15 +881,15 @@ def main():
         # Generate middle waiting time and frames (between steps)
         wait_time_mid = np.random.uniform(MID_WAIT_TIME_RANGE[0], MID_WAIT_TIME_RANGE[1])
         wait_frames_mid = int(wait_time_mid / TIME_STEP)
-
+        prev_stance =  0 if step1['stance_foot'] == "left" else 1
         # Generate waiting frames between steps (using final state from step 1)
         try:
             wait_data_mid = generate_waiting_frames(
-                robot, gait, state_after_step1, wait_frames_mid, lf_step2_target, rf_step2_target, step2_disp["target_yaw"]
+                robot, gait, state_after_step1, wait_frames_mid, prev_stance
             )
             # Override cmd_footstep and cmd_stance to match the previous step (step1)
-            wait_data_mid["cmd_footstep"][:] = step1_data["cmd_footstep"][-1]
-            wait_data_mid["cmd_stance"][:] = step1_data["cmd_stance"][-1]
+            # wait_data_mid["cmd_footstep"][:] = step1_data["cmd_footstep"][-1]
+            # wait_data_mid["cmd_stance"][:] = step1_data["cmd_stance"][-1]
         except Exception as e:
             print(f"✗ Failed to generate wait_data_mid: {e}")
             continue
@@ -903,7 +905,7 @@ def main():
 
         # Extract second step data
         try:
-            step2_data = extract_trajectory_data(robot, solver2, gait, lf_step2_target, rf_step2_target, step2_disp["target_yaw"])
+            step2_data = extract_trajectory_data(robot, solver2, gait, lf_step2_target, rf_step2_target)
         except Exception as e:
             print(f"✗ Failed to extract step2 data: {e}")
             del solver2
@@ -915,13 +917,14 @@ def main():
 
         # Generate waiting frames after second step (using final state from step 2)
         final_state = solver2.xs[-1].copy()  # Copy to avoid reference to solver
+        prev_stance2 = 0 if step2_disp['stance_foot'] == "left" else 1
         try:
             wait_data_after = generate_waiting_frames(
-                robot, gait, final_state, wait_frames_after, lf_step2_target, rf_step2_target, step2_disp["target_yaw"]
+                robot, gait, final_state, wait_frames_after, prev_stance2
             )
             # Override cmd_footstep and cmd_stance to match the previous step (step2)
-            wait_data_after["cmd_footstep"][:] = step2_data["cmd_footstep"][-1]
-            wait_data_after["cmd_stance"][:] = step2_data["cmd_stance"][-1]
+            # wait_data_after["cmd_footstep"][:] = step2_data["cmd_footstep"][-1]
+            # wait_data_after["cmd_stance"][:] = step2_data["cmd_stance"][-1]
         except Exception as e:
             print(f"✗ Failed to generate wait_data_after: {e}")
             del solver2
@@ -1031,137 +1034,157 @@ def main():
         #     memory_delta = current_memory - initial_memory
         #     print(f"  [Memory after GC] {current_memory:.2f} MB (Δ{memory_delta:+.2f} MB)")
 
-        # # Optionally plot this trajectory (every Nth sample to avoid too many plots)
-        # if successful_samples % 50 == 0:  # Plot every 5th successful sample
-        #     print(f"  Plotting trajectory {successful_samples}...")
-        #     # Combine all data for this trajectory
-        #     traj_q = np.vstack([
-        #         wait_data_before["q"], step1_data["q"], wait_data_mid["q"],
-        #         step2_data["q"], wait_data_after["q"]
-        #     ])
-        #     traj_v_b = np.vstack([
-        #         wait_data_before["v_b"], step1_data["v_b"], wait_data_mid["v_b"],
-        #         step2_data["v_b"], wait_data_after["v_b"]
-        #     ])
-        #     # Extract COM and feet
-        #     com_traj = extract_com_from_trajectory(robot, traj_q, 0, len(traj_q))
-        #     lf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "left_foot_link")
-        #     rf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "right_foot_link")
+        # Optionally plot this trajectory (every Nth sample to avoid too many plots)
+        if successful_samples % 1 == 0:  # Plot every 5th successful sample
+            print(f"  Plotting trajectory {successful_samples}...")
+            # Combine all data for this trajectory
+            traj_q = np.vstack([
+                wait_data_before["q"], step1_data["q"], wait_data_mid["q"],
+                step2_data["q"], wait_data_after["q"]
+            ])
+            traj_v_b = np.vstack([
+                wait_data_before["v_b"], step1_data["v_b"], wait_data_mid["v_b"],
+                step2_data["v_b"], wait_data_after["v_b"]
+            ])
+            # Extract COM and feet
+            com_traj = extract_com_from_trajectory(robot, traj_q, 0, len(traj_q))
+            lf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "left_foot_link")
+            rf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "right_foot_link")
 
-        #     # Compute foot velocities in world frame
-        #     lf_vel = extract_foot_velocity_from_trajectory(lf_traj, TIME_STEP)
-        #     rf_vel = extract_foot_velocity_from_trajectory(rf_traj, TIME_STEP)
+            # Compute foot velocities in world frame
+            lf_vel = extract_foot_velocity_from_trajectory(lf_traj, TIME_STEP)
+            rf_vel = extract_foot_velocity_from_trajectory(rf_traj, TIME_STEP)
 
-        #     # Plot
-        #     fig, axes = plt.subplots(4, 2, figsize=(14, 18))
-        #     fig.suptitle(f"Trajectory Analysis - Sample {i+1}, Successful #{successful_samples}", fontsize=14, fontweight='bold')
-        #     time_steps = np.arange(len(com_traj))
+            # Plot
+            fig, axes = plt.subplots(5, 2, figsize=(14, 20))
+            fig.suptitle(f"Trajectory Analysis - Sample {i+1}, Successful #{successful_samples}", fontsize=14, fontweight='bold')
+            time_steps = np.arange(len(com_traj))
 
-        #     # XY plane
-        #     ax = axes[0, 0]
-        #     ax.plot(com_traj[:, 0], com_traj[:, 1], 'b-', linewidth=2, label='COM')
-        #     ax.plot(lf_traj[:, 0], lf_traj[:, 1], 'r--', linewidth=2, label='Left Foot')
-        #     ax.plot(rf_traj[:, 0], rf_traj[:, 1], 'g--', linewidth=2, label='Right Foot')
-        #     ax.set_xlabel('X (m)')
-        #     ax.set_ylabel('Y (m)')
-        #     ax.set_title('Top-Down View')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
-        #     ax.axis('equal')
+            # XY plane (top-down view)
+            ax = axes[0, 0]
+            ax.plot(com_traj[:, 0], com_traj[:, 1], 'b-', linewidth=2, label='COM')
+            ax.plot(lf_traj[:, 0], lf_traj[:, 1], 'r--', linewidth=2, label='Left Foot')
+            ax.plot(rf_traj[:, 0], rf_traj[:, 1], 'g--', linewidth=2, label='Right Foot')
+            ax.plot(com_traj[0, 0], com_traj[0, 1], 'bo', markersize=8, label='Start')
+            ax.plot(com_traj[-1, 0], com_traj[-1, 1], 'bs', markersize=8, label='End')
+            ax.set_xlabel('X (m)')
+            ax.set_ylabel('Y (m)')
+            ax.set_title('Top-Down View (XY Plane)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            ax.axis('equal')
 
-        #     # Y position (lateral lean)
-        #     ax = axes[1, 0]
-        #     ax.plot(time_steps, com_traj[:, 1], 'b-', linewidth=2.5, label='COM Y')
-        #     ax.plot(time_steps, lf_traj[:, 1], 'r--', linewidth=1.5, alpha=0.7, label='LF Y')
-        #     ax.plot(time_steps, rf_traj[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='RF Y')
-        #     ax.fill_between(time_steps, lf_traj[:, 1], rf_traj[:, 1], alpha=0.1, color='gray')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Y Position (m)')
-        #     ax.set_title('Lateral Lean (CRITICAL)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+            # X position over time
+            ax = axes[0, 1]
+            ax.plot(time_steps, com_traj[:, 0], 'b-', linewidth=2, label='COM X')
+            ax.plot(time_steps, lf_traj[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='LF X')
+            ax.plot(time_steps, rf_traj[:, 0], 'g--', linewidth=1.5, alpha=0.7, label='RF X')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('X Position (m)')
+            ax.set_title('Forward/Backward Motion')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
 
-        #     # Z position (height)
-        #     ax = axes[1, 1]
-        #     ax.plot(time_steps, com_traj[:, 2], 'b-', linewidth=2, label='COM Z')
-        #     ax.plot(time_steps, lf_traj[:, 2], 'r--', linewidth=1.5, alpha=0.7, label='LF Z')
-        #     ax.plot(time_steps, rf_traj[:, 2], 'g--', linewidth=1.5, alpha=0.7, label='RF Z')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Height (m)')
-        #     ax.set_title('Vertical Motion')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+            # Y position over time (lateral lean - CRITICAL)
+            ax = axes[1, 0]
+            ax.plot(time_steps, com_traj[:, 1], 'b-', linewidth=2.5, label='COM Y')
+            ax.plot(time_steps, lf_traj[:, 1], 'r--', linewidth=1.5, alpha=0.7, label='LF Y')
+            ax.plot(time_steps, rf_traj[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='RF Y')
+            ax.fill_between(time_steps, lf_traj[:, 1], rf_traj[:, 1], alpha=0.1, color='gray')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('Y Position (m)')
+            ax.set_title('Lateral Lean (CRITICAL)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
 
-        #     # X position
-        #     ax = axes[0, 1]
-        #     ax.plot(time_steps, com_traj[:, 0], 'b-', linewidth=2, label='COM X')
-        #     ax.plot(time_steps, lf_traj[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='LF X')
-        #     ax.plot(time_steps, rf_traj[:, 0], 'g--', linewidth=1.5, alpha=0.7, label='RF X')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('X Position (m)')
-        #     ax.set_title('Forward/Backward Motion')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+            # Z position over time (height)
+            ax = axes[1, 1]
+            ax.plot(time_steps, com_traj[:, 2], 'b-', linewidth=2, label='COM Z')
+            ax.plot(time_steps, lf_traj[:, 2], 'r--', linewidth=1.5, alpha=0.7, label='LF Z')
+            ax.plot(time_steps, rf_traj[:, 2], 'g--', linewidth=1.5, alpha=0.7, label='RF Z')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('Height (m)')
+            ax.set_title('Vertical Motion')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
 
-        #     # Left foot velocity (world frame)
-        #     ax = axes[2, 0]
-        #     lf_vel_norm = np.linalg.norm(lf_vel, axis=1)
-        #     ax.plot(time_steps, lf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='LF Vel X')
-        #     ax.plot(time_steps, lf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='LF Vel Y')
-        #     ax.plot(time_steps, lf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='LF Vel Z')
-        #     ax.plot(time_steps, lf_vel_norm, 'k-', linewidth=2, label='LF Vel Norm')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Velocity (m/s)')
-        #     ax.set_title('Left Foot Velocity (World Frame)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+            # Left foot velocity (world frame)
+            ax = axes[2, 0]
+            lf_vel_norm = np.linalg.norm(lf_vel, axis=1)
+            ax.plot(time_steps, lf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='LF Vel X')
+            ax.plot(time_steps, lf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='LF Vel Y')
+            ax.plot(time_steps, lf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='LF Vel Z')
+            ax.plot(time_steps, lf_vel_norm, 'k-', linewidth=2, label='LF Vel Norm')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('Velocity (m/s)')
+            ax.set_title('Left Foot Velocity (World Frame)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
 
-        #     # Right foot velocity (world frame)
-        #     ax = axes[2, 1]
-        #     rf_vel_norm = np.linalg.norm(rf_vel, axis=1)
-        #     ax.plot(time_steps, rf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='RF Vel X')
-        #     ax.plot(time_steps, rf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='RF Vel Y')
-        #     ax.plot(time_steps, rf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='RF Vel Z')
-        #     ax.plot(time_steps, rf_vel_norm, 'k-', linewidth=2, label='RF Vel Norm')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Velocity (m/s)')
-        #     ax.set_title('Right Foot Velocity (World Frame)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+            # Right foot velocity (world frame)
+            ax = axes[2, 1]
+            rf_vel_norm = np.linalg.norm(rf_vel, axis=1)
+            ax.plot(time_steps, rf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='RF Vel X')
+            ax.plot(time_steps, rf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='RF Vel Y')
+            ax.plot(time_steps, rf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='RF Vel Z')
+            ax.plot(time_steps, rf_vel_norm, 'k-', linewidth=2, label='RF Vel Norm')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('Velocity (m/s)')
+            ax.set_title('Right Foot Velocity (World Frame)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
 
-        #     # Base linear velocity (base frame)
-        #     ax = axes[3, 0]
-        #     base_vel_linear = traj_v_b[:, :3]
-        #     base_vel_linear_norm = np.linalg.norm(base_vel_linear, axis=1)
-        #     ax.plot(time_steps, base_vel_linear[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base Vel X')
-        #     ax.plot(time_steps, base_vel_linear[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base Vel Y')
-        #     ax.plot(time_steps, base_vel_linear[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base Vel Z')
-        #     ax.plot(time_steps, base_vel_linear_norm, 'k-', linewidth=2, label='Base Vel Norm')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Velocity (m/s)')
-        #     ax.set_title('Base Linear Velocity (Base Frame)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+            # Base linear velocity (base frame)
+            ax = axes[3, 0]
+            base_vel_linear = traj_v_b[:, :3]
+            base_vel_linear_norm = np.linalg.norm(base_vel_linear, axis=1)
+            ax.plot(time_steps, base_vel_linear[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base Vel X')
+            ax.plot(time_steps, base_vel_linear[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base Vel Y')
+            ax.plot(time_steps, base_vel_linear[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base Vel Z')
+            ax.plot(time_steps, base_vel_linear_norm, 'k-', linewidth=2, label='Base Vel Norm')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('Velocity (m/s)')
+            ax.set_title('Base Linear Velocity (Base Frame)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
 
-        #     # Base angular velocity (base frame)
-        #     ax = axes[3, 1]
-        #     base_vel_angular = traj_v_b[:, 3:]
-        #     base_vel_angular_norm = np.linalg.norm(base_vel_angular, axis=1)
-        #     ax.plot(time_steps, base_vel_angular[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base ω X')
-        #     ax.plot(time_steps, base_vel_angular[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base ω Y')
-        #     ax.plot(time_steps, base_vel_angular[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base ω Z')
-        #     ax.plot(time_steps, base_vel_angular_norm, 'k-', linewidth=2, label='Base ω Norm')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Angular Velocity (rad/s)')
-        #     ax.set_title('Base Angular Velocity (Base Frame)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+            # Base angular velocity (base frame)
+            ax = axes[3, 1]
+            base_vel_angular = traj_v_b[:, 3:]
+            base_vel_angular_norm = np.linalg.norm(base_vel_angular, axis=1)
+            ax.plot(time_steps, base_vel_angular[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base ω X')
+            ax.plot(time_steps, base_vel_angular[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base ω Y')
+            ax.plot(time_steps, base_vel_angular[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base ω Z')
+            ax.plot(time_steps, base_vel_angular_norm, 'k-', linewidth=2, label='Base ω Norm')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('Angular Velocity (rad/s)')
+            ax.set_title('Base Angular Velocity (Base Frame)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
 
-        #     plt.tight_layout()
-        #     plot_file = os.path.join(SCRIPT_DIR, f"velocity_sample_{successful_samples}.png")
-        #     plt.savefig(plot_file, dpi=150, bbox_inches='tight')
-        #     print(f"  Saved: {plot_file}")
-        #     plt.close(fig)
+            # COM velocity (world frame)
+            ax = axes[4, 0]
+            com_vel = extract_foot_velocity_from_trajectory(com_traj, TIME_STEP)
+            com_vel_norm = np.linalg.norm(com_vel, axis=1)
+            ax.plot(time_steps, com_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='COM Vel X')
+            ax.plot(time_steps, com_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='COM Vel Y')
+            ax.plot(time_steps, com_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='COM Vel Z')
+            ax.plot(time_steps, com_vel_norm, 'k-', linewidth=2, label='COM Vel Norm')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('Velocity (m/s)')
+            ax.set_title('COM Velocity (World Frame)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+            # Empty subplot (or additional data)
+            ax = axes[4, 1]
+            ax.axis('off')
+
+            plt.tight_layout()
+            plot_file = os.path.join(SCRIPT_DIR, f"velocity_sample_{successful_samples}.png")
+            plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+            print(f"  Saved: {plot_file}")
+            plt.close(fig)
 
     # Remove last element (it's one past the end)
     traj_starts = traj_starts[:-1]
@@ -1230,18 +1253,18 @@ def main():
     print(f"  traj_dt:       {TIME_STEP:.6f} (time step)")
     print("=" * 80)
 
-    # # Plot random trajectory COM
-    # if successful_samples > 0:
-    #     print("\nPlotting random trajectory COM...")
-    #     random_traj_idx = np.random.randint(0, len(traj))
-    #     traj_start = traj[random_traj_idx]
-    #     traj_end = traj[random_traj_idx + 1] if random_traj_idx + 1 < len(traj) else len(q)
-    
-    #     fig = plot_com_trajectory(robot, q, traj_start, traj_end, random_traj_idx)
-    #     plot_filename = os.path.join(SCRIPT_DIR, f"com_trajectory_random_traj_{random_traj_idx}.png")
-    #     plt.savefig(plot_filename, dpi=150, bbox_inches='tight')
-    #     print(f"Saved random trajectory plot: {plot_filename}")
-    #     plt.close(fig)
+    # Plot random trajectory COM
+    if successful_samples > 0:
+        print("\nPlotting random trajectory COM...")
+        random_traj_idx = np.random.randint(0, len(traj))
+        traj_start = traj[random_traj_idx]
+        traj_end = traj[random_traj_idx + 1] if random_traj_idx + 1 < len(traj) else len(q)
+
+        fig = plot_com_trajectory(robot, q, traj_start, traj_end, random_traj_idx)
+        plot_filename = os.path.join(SCRIPT_DIR, f"com_trajectory_random_traj_{random_traj_idx}.png")
+        plt.savefig(plot_filename, dpi=150, bbox_inches='tight')
+        print(f"Saved random trajectory plot: {plot_filename}")
+        plt.close(fig)
 
 
 if __name__ == "__main__":
