@@ -44,11 +44,11 @@ SUPPORT_KNOTS = 20  # Increased from 10 for smoother and more accurate COM trans
 TRANSITION_KNOTS = 10  # Knots for post-swing COM centering phase
 COM_SHIFT_RATIO = 0.7  # Ratio of COM shift towards center during swing (0.8 = 80%)
 INITIAL_COM_SHIFT = 0.5  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
-WITHDISPLAY = False
+WITHDISPLAY = True
 CHECKPOINT_FREQUENCY = 1  # Save checkpoint every N successful trajectories (0 to disable)
 
 # Step generation parameters
-STEP_HEIGHT = 0.125  # Step height in meters
+STEP_HEIGHT = 0.075  # Step height in meters
 WAIT_TIME_RANGE = (0.8, 1.0)  # Waiting period before step (seconds)
 MID_WAIT_TIME_RANGE = (0.3, 0.6)  # Waiting period between two steps (seconds)
 # Grid sampling parameters
@@ -1046,6 +1046,10 @@ def main():
                 wait_data_before["v_b"], step1_data["v_b"], wait_data_mid["v_b"],
                 step2_data["v_b"], wait_data_after["v_b"]
             ])
+            traj_cmd_countdown = np.vstack([
+                wait_data_before["cmd_countdown"], step1_data["cmd_countdown"], wait_data_mid["cmd_countdown"],
+                step2_data["cmd_countdown"], wait_data_after["cmd_countdown"]
+            ])
             # Extract COM and feet
             com_traj = extract_com_from_trajectory(robot, traj_q, 0, len(traj_q))
             lf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "left_foot_link")
@@ -1059,6 +1063,17 @@ def main():
             fig, axes = plt.subplots(5, 2, figsize=(14, 20))
             fig.suptitle(f"Trajectory Analysis - Sample {i+1}, Successful #{successful_samples}", fontsize=14, fontweight='bold')
             time_steps = np.arange(len(com_traj))
+
+            # Helper function to add countdown as dashed lines
+            def add_countdown_background(ax, time_steps, countdown):
+                """Add dashed line overlay for countdown (active stepping phase)"""
+                # Plot countdown as dashed lines on secondary y-axis
+                ax2 = ax.twinx()
+                ax2.plot(time_steps, countdown[:, 0], 'k--', linewidth=1.5, alpha=0.5, label='Countdown')
+                ax2.set_ylabel('Countdown', alpha=0.5)
+                ax2.set_ylim(-0.1, 1.1)
+                ax2.tick_params(axis='y', labelcolor='black', labelsize=8)
+                ax2.spines['right'].set_alpha(0.3)
 
             # XY plane (top-down view)
             ax = axes[0, 0]
@@ -1076,6 +1091,7 @@ def main():
 
             # X position over time
             ax = axes[0, 1]
+            add_countdown_background(ax, time_steps, traj_cmd_countdown)
             ax.plot(time_steps, com_traj[:, 0], 'b-', linewidth=2, label='COM X')
             ax.plot(time_steps, lf_traj[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='LF X')
             ax.plot(time_steps, rf_traj[:, 0], 'g--', linewidth=1.5, alpha=0.7, label='RF X')
@@ -1087,6 +1103,7 @@ def main():
 
             # Y position over time (lateral lean - CRITICAL)
             ax = axes[1, 0]
+            add_countdown_background(ax, time_steps, traj_cmd_countdown)
             ax.plot(time_steps, com_traj[:, 1], 'b-', linewidth=2.5, label='COM Y')
             ax.plot(time_steps, lf_traj[:, 1], 'r--', linewidth=1.5, alpha=0.7, label='LF Y')
             ax.plot(time_steps, rf_traj[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='RF Y')
@@ -1099,6 +1116,7 @@ def main():
 
             # Z position over time (height)
             ax = axes[1, 1]
+            add_countdown_background(ax, time_steps, traj_cmd_countdown)
             ax.plot(time_steps, com_traj[:, 2], 'b-', linewidth=2, label='COM Z')
             ax.plot(time_steps, lf_traj[:, 2], 'r--', linewidth=1.5, alpha=0.7, label='LF Z')
             ax.plot(time_steps, rf_traj[:, 2], 'g--', linewidth=1.5, alpha=0.7, label='RF Z')
@@ -1110,11 +1128,10 @@ def main():
 
             # Left foot velocity (world frame)
             ax = axes[2, 0]
-            lf_vel_norm = np.linalg.norm(lf_vel, axis=1)
+            add_countdown_background(ax, time_steps, traj_cmd_countdown)
             ax.plot(time_steps, lf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='LF Vel X')
             ax.plot(time_steps, lf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='LF Vel Y')
             ax.plot(time_steps, lf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='LF Vel Z')
-            ax.plot(time_steps, lf_vel_norm, 'k-', linewidth=2, label='LF Vel Norm')
             ax.set_xlabel('Time Step')
             ax.set_ylabel('Velocity (m/s)')
             ax.set_title('Left Foot Velocity (World Frame)')
@@ -1123,11 +1140,10 @@ def main():
 
             # Right foot velocity (world frame)
             ax = axes[2, 1]
-            rf_vel_norm = np.linalg.norm(rf_vel, axis=1)
+            add_countdown_background(ax, time_steps, traj_cmd_countdown)
             ax.plot(time_steps, rf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='RF Vel X')
             ax.plot(time_steps, rf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='RF Vel Y')
             ax.plot(time_steps, rf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='RF Vel Z')
-            ax.plot(time_steps, rf_vel_norm, 'k-', linewidth=2, label='RF Vel Norm')
             ax.set_xlabel('Time Step')
             ax.set_ylabel('Velocity (m/s)')
             ax.set_title('Right Foot Velocity (World Frame)')
@@ -1136,12 +1152,11 @@ def main():
 
             # Base linear velocity (base frame)
             ax = axes[3, 0]
+            add_countdown_background(ax, time_steps, traj_cmd_countdown)
             base_vel_linear = traj_v_b[:, :3]
-            base_vel_linear_norm = np.linalg.norm(base_vel_linear, axis=1)
             ax.plot(time_steps, base_vel_linear[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base Vel X')
             ax.plot(time_steps, base_vel_linear[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base Vel Y')
             ax.plot(time_steps, base_vel_linear[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base Vel Z')
-            ax.plot(time_steps, base_vel_linear_norm, 'k-', linewidth=2, label='Base Vel Norm')
             ax.set_xlabel('Time Step')
             ax.set_ylabel('Velocity (m/s)')
             ax.set_title('Base Linear Velocity (Base Frame)')
@@ -1150,12 +1165,11 @@ def main():
 
             # Base angular velocity (base frame)
             ax = axes[3, 1]
+            add_countdown_background(ax, time_steps, traj_cmd_countdown)
             base_vel_angular = traj_v_b[:, 3:]
-            base_vel_angular_norm = np.linalg.norm(base_vel_angular, axis=1)
             ax.plot(time_steps, base_vel_angular[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base ω X')
             ax.plot(time_steps, base_vel_angular[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base ω Y')
             ax.plot(time_steps, base_vel_angular[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base ω Z')
-            ax.plot(time_steps, base_vel_angular_norm, 'k-', linewidth=2, label='Base ω Norm')
             ax.set_xlabel('Time Step')
             ax.set_ylabel('Angular Velocity (rad/s)')
             ax.set_title('Base Angular Velocity (Base Frame)')
@@ -1164,12 +1178,11 @@ def main():
 
             # COM velocity (world frame)
             ax = axes[4, 0]
+            add_countdown_background(ax, time_steps, traj_cmd_countdown)
             com_vel = extract_foot_velocity_from_trajectory(com_traj, TIME_STEP)
-            com_vel_norm = np.linalg.norm(com_vel, axis=1)
             ax.plot(time_steps, com_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='COM Vel X')
             ax.plot(time_steps, com_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='COM Vel Y')
             ax.plot(time_steps, com_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='COM Vel Z')
-            ax.plot(time_steps, com_vel_norm, 'k-', linewidth=2, label='COM Vel Norm')
             ax.set_xlabel('Time Step')
             ax.set_ylabel('Velocity (m/s)')
             ax.set_title('COM Velocity (World Frame)')

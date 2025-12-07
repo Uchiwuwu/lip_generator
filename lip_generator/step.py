@@ -102,25 +102,16 @@ class SimpleBipedGaitProblem:
 
         loco3dModel = []
 
-        # Initial double support phase - gradually shift COM towards the foot that will swing first
-        com_initial_center = (rfPos0 + lfPos0) / 2
-        com_initial_center[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
-
-        # Determine which foot to prepare for (will swing first)
-        if leftFootMovement > rightFootMovement:
-            # Left foot will swing, so shift COM towards right foot (50% of the way)
-            com_initial_target = rfPos0.copy()
-        else:
-            # Right foot will swing, so shift COM towards left foot (50% of the way)
-            com_initial_target = lfPos0.copy()
-        com_initial_target[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
+        # Initial double support phase - shift COM to prepare for swing
+        # The final position of this phase should match comRef used in swing phase
+        com_initial = pinocchio.centerOfMass(self.rmodel, self.rdata, q0).copy()
 
         doubleSupport_initial = [
             self.createSwingFootModel(
                 timeStep,
                 [self.rfId, self.lfId],
-                comTask=com_initial_center + (com_initial_target - com_initial_center) * initialComShift * ((k + 1) / supportKnots),
-                comWeight=5e6
+                comTask=comRef,  # Keep COM at comRef throughout initial phase
+                comWeight=1e7  # Higher weight for stability
             )
             for k in range(supportKnots)
         ]
@@ -143,21 +134,24 @@ class SimpleBipedGaitProblem:
             )
             loco3dModel += lStep
 
-            # Update CoM reference
-            comRef = (leftFootTarget + rfPos0) / 2
-            comRef[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
+            # Add transition double support - hold COM at final swing position
+            # Calculate final COM position from swing phase (same logic as in createFootstepModelsWithTarget)
+            # The swing phase moved COM from comRef towards center of stance and landing feet
+            com_before_swing = (rfPos0 + lfPos0) / 2
+            com_before_swing[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2] + 0.1
 
-            # Add transition double support - gradually shift COM towards support foot (right foot)
-            # Shift 50% towards the support foot for stability without excessive movement
-            com_center = comRef.copy()
-            com_support = rfPos0.copy()
-            com_support[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
+            target_center = (rfPos0 + leftFootTarget) / 2
+            target_center[2] = com_before_swing[2]
+            com_displacement = target_center[:2] - com_before_swing[:2]
+
+            final_swing_com = com_before_swing[:2] + com_displacement * comShiftRatio
+            final_swing_com_3d = np.array([final_swing_com[0], final_swing_com[1], com_before_swing[2]])
 
             doubleSupport_transition = [
                 self.createSwingFootModel(
                     timeStep,
                     [self.rfId, self.lfId],
-                    comTask=com_center + (com_support - com_center) * 0.0 * ((k + 1) / transitionKnots),
+                    comTask=final_swing_com_3d,
                     comWeight=1e7
                 )
                 for k in range(transitionKnots)
@@ -194,22 +188,25 @@ class SimpleBipedGaitProblem:
             )
             loco3dModel += rStep
 
-            # Update CoM reference
-            comRef = (leftFootTarget + rightFootTarget) / 2
-            comRef[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
+            # Add transition double support - hold COM at final swing position
+            # Calculate final COM position from swing phase (same logic as in createFootstepModelsWithTarget)
+            # The swing phase moved COM from comRef towards center of stance and landing feet
+            com_before_swing = (rfPos0 + lfPos0) / 2
+            com_before_swing[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2] + 0.1
 
-            # Add transition double support - gradually shift COM towards support foot (left foot)
-            # Shift 50% towards the support foot for stability without excessive movement
-            com_center = comRef.copy()
-            com_support = lfPos0.copy()
-            com_support[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
+            target_center = (lfPos0 + rightFootTarget) / 2
+            target_center[2] = com_before_swing[2]
+            com_displacement = target_center[:2] - com_before_swing[:2]
+
+            final_swing_com = com_before_swing[:2] + com_displacement * comShiftRatio
+            final_swing_com_3d = np.array([final_swing_com[0], final_swing_com[1], com_before_swing[2]])
 
             doubleSupport_transition = [
                 self.createSwingFootModel(
                     timeStep,
                     [self.rfId, self.lfId],
-                    comTask=com_center + (com_support - com_center) * 0.0 * ((k + 1) / transitionKnots),
-                    comWeight=5e6
+                    comTask=final_swing_com_3d,
+                    comWeight=1e7
                 )
                 for k in range(transitionKnots)
             ]
@@ -370,39 +367,25 @@ class SimpleBipedGaitProblem:
                 phKnots = numKnots / 2
                 progress = (k + 1) / numKnots  # Linear progress from 0 to 1
 
-                # QUINTIC TRAJECTORY WITH LANDING DAMPING (COMMENTED OUT - PRESERVE FOR FUTURE USE)
-                # # Swing up phase - use quintic polynomial for smooth z trajectory
-                # if k < phKnots:
-                #     xy_progress = progress
-                #     # Quintic basis: 10*t^3 - 15*t^4 + 6*t^5 (normalized to 0-1)
-                #     t = (k + 1) / phKnots  # Local phase progress 0 to 1
-                #     z_height = stepHeight * (10 * t**3 - 15 * t**4 + 6 * t**5)
-                # else:
-                #     # Swing down phase - use quintic polynomial with landing damping
-                #     # Apply stronger damping in final 30% of swing for softer landing
-                #     t = float(k - phKnots + 1) / phKnots  # Local phase progress 0 to 1
-                #     z_base = 1 - (10 * t**3 - 15 * t**4 + 6 * t**5)
-                #
-                #     # Add landing damping: reduce z_height more in final phase
-                #     # When t > 0.7 (last 30%), apply additional quadratic damping
-                #     if t > 0.7:
-                #         landing_phase = (t - 0.7) / 0.3  # Normalized 0 to 1 for landing phase
-                #         landing_damping = 1.0 - landing_phase**2  # Quadratic decay
-                #         z_height = stepHeight * z_base * landing_damping
-                #     else:
-                #         z_height = stepHeight * z_base
-                #
-                #     xy_progress = progress
+                # UPSIDE-DOWN PARABOLA with flat peak
+                xy_progress = progress
 
-                # DEFAULT: Linear trajectory
-                if k < phKnots:
-                    # Swing up phase
-                    xy_progress = progress
-                    z_height = stepHeight * (k / phKnots)
+                # Create trajectory with 3 phases: swing up, plateau, swing down
+                plateau_fraction = 0.2  # Middle 20% is flat at the peak
+                swing_up_end = 0.5 - plateau_fraction / 2  # 0.4
+                swing_down_start = 0.5 + plateau_fraction / 2  # 0.6
+
+                if progress < swing_up_end:
+                    # Swing up phase - use quintic polynomial
+                    t = progress / swing_up_end  # Normalize to 0-1
+                    z_height = stepHeight * (10 * t**3 - 15 * t**4 + 6 * t**5)
+                elif progress < swing_down_start:
+                    # Plateau phase - stay at peak
+                    z_height = stepHeight
                 else:
-                    # Swing down phase
-                    xy_progress = progress
-                    z_height = stepHeight * (1 - float(k - phKnots) / phKnots)
+                    # Swing down phase - use quintic polynomial
+                    t = (progress - swing_down_start) / (1.0 - swing_down_start)  # Normalize to 0-1
+                    z_height = stepHeight * (1 - (10 * t**3 - 15 * t**4 + 6 * t**5))
 
                 # Interpolate x,y position
                 tref = footPos0 + displacement * xy_progress
@@ -434,10 +417,10 @@ class SimpleBipedGaitProblem:
                     supportFootIds,
                     comTask=comTask,
                     swingFootTask=swingFootTask,
-                    footWeight=5e7,
-                    progressRatio=progress,  # Pass current progress for landing damping
-                    landingDampingStart=0.5,  # Start damping at 70% of swing
-                    landingDampingWeight=5e5  # Base weight for velocity penalty
+                    footWeight=1e9,  # Very high weight to enforce straight line trajectory in x,y
+                    # progressRatio=progress,  # Pass current progress for landing damping
+                    # landingDampingStart=0.5,  # Start damping at 70% of swing
+                    # landingDampingWeight=5e3  # Base weight for velocity penalty
                 )
             ]
 
@@ -657,6 +640,25 @@ class SimpleBipedGaitProblem:
                     except:
                         pass  # Skip if not supported
 
+        # Add dedicated base angular velocity cost to directly penalize angular velocity
+        try:
+            baseAngularVelResidual = crocoddyl.ResidualModelFrameVelocity(
+                self.state,
+                self.rmodel.getFrameId("base_link"),
+                pinocchio.Motion.Zero(),
+                pinocchio.LOCAL_WORLD_ALIGNED,
+                nu
+            )
+            # Weight only the angular velocity (last 3 components of 6D motion)
+            angularVelWeights = np.array([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+            angularVelActivation = crocoddyl.ActivationModelWeightedQuad(angularVelWeights**2)
+            baseAngularVelCost = crocoddyl.CostModelResidual(
+                self.state, angularVelActivation, baseAngularVelResidual
+            )
+            costModel.addCost("baseAngularVel", baseAngularVelCost, 1e8)  # Very high weight
+        except:
+            pass  # Skip if base_link frame doesn't exist
+
         # State weights with increased penalty for upper body joints
         # Upper body: torso(2) + left_arm(7) + right_arm(7) + head(1) = 17 joints at indices 6-22
         num_upper_body = 17
@@ -665,9 +667,11 @@ class SimpleBipedGaitProblem:
         stateWeights = np.array(
             [0] * 3 +                          # base position (free)
             [500.0] * 3 +                      # base orientation
-            [10.0] * num_upper_body +           # upper body joints - HIGHER weight (1.0 instead of 0.01)
+            [100.0] * num_upper_body +          # upper body joints - HIGHER weight (1.0 instead of 0.01)
             [0.01] * num_leg_joints +          # leg joints (normal 0.01)
-            [10] * self.state.nv               # velocities
+            [10] * 3 +                         # base linear velocity
+            [1e3] * 3 +                        # base angular velocity - VERY HIGH
+            [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
             self.state, self.rmodel.defaultState, nu
@@ -684,8 +688,8 @@ class SimpleBipedGaitProblem:
                 self.state, self.actuation, nu
             )
         ctrlReg = crocoddyl.CostModelResidual(self.state, ctrlResidual)
-        costModel.addCost("stateReg", stateReg, 1e1)
-        costModel.addCost("ctrlReg", ctrlReg, 1e-1)
+        costModel.addCost("stateReg", stateReg, 1e2)
+        costModel.addCost("ctrlReg", ctrlReg, 1e3)
         # Creating the action model for the KKT dynamics with simpletic Euler
         # integration scheme
         if self._fwddyn:
@@ -818,11 +822,13 @@ class SimpleBipedGaitProblem:
         num_leg_joints = self.state.nv - 6 - num_upper_body
 
         stateWeights = np.array(
-            [0.0] * 3 +                        # base position (free)
-            [500.0] * 3 +                      # base orientation
-            [10.0] * num_upper_body +           # upper body joints - HIGHER weight
+            [0.0] * 3 +                        # base position
+            [5e3] * 3 +                        # base orientation
+            [5e3] * num_upper_body +          # upper body joints - HIGHER weight
             [0.01] * num_leg_joints +          # leg joints (normal 0.01)
-            [10] * self.state.nv               # velocities
+            [10] * 3 +                         # base linear velocity
+            [1e3] * 3 +                         # base angular velocity
+            [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
             self.state, self.rmodel.defaultState, nu
@@ -907,10 +913,13 @@ class SimpleBipedGaitProblem:
         num_leg_joints = self.rmodel.nv - 6 - num_upper_body
 
         stateWeights = np.array(
-            [1.0] * 6 +                        # base (position + orientation)
-            [10.0] * num_upper_body +           # upper body joints - HIGHER weight
-            [0.1] * num_leg_joints +           # leg joints (0.1)
-            [10] * self.rmodel.nv              # velocities
+            [0.0] * 3 +                        # base position
+            [5e3] * 3 +                        # base orientation
+            [5e3] * num_upper_body +          # upper body joints - HIGHER weight
+            [0.01] * num_leg_joints +          # leg joints (normal 0.01)
+            [10] * 3 +                         # base linear velocity
+            [1e3] * 3 +                         # base angular velocity
+            [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
             self.state, self.rmodel.defaultState, 0
