@@ -45,7 +45,7 @@ TRANSITION_KNOTS = 10  # Knots for post-swing COM centering phase
 COM_SHIFT_RATIO = 0.7  # Ratio of COM shift towards center during swing (0.8 = 80%)
 INITIAL_COM_SHIFT = 0.5  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
 WITHDISPLAY = True
-CHECKPOINT_FREQUENCY = 1  # Save checkpoint every N successful trajectories (0 to disable)
+CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
 
 # Step generation parameters
 STEP_HEIGHT = 0.075  # Step height in meters
@@ -57,12 +57,12 @@ GRID_Y_STEPS = 3  # Number of steps in y direction
 GRID_YAW_STEPS = 3  # Number of steps in yaw direction
 X_STEP_UNIT = 0.1
 Y_STEP_UNIT = 0.05
-Y_OFFSET = 0.15
+Y_OFFSET = 0.2
 YAW_STEP_UNIT = 0.2
 
 # Solver parameters
-MAX_ITERATIONS = 300  # Increased for better convergence with higher accuracy requirements
-SOLVER_THRESHOLD = 1e-4  # Tightened threshold for more precise solutions
+MAX_ITERATIONS = 600  # Increased for better convergence with higher accuracy requirements
+SOLVER_THRESHOLD = 1e-5  # Tightened threshold for more precise solutions
 
 
 def get_memory_usage():
@@ -1028,12 +1028,6 @@ def main():
                 all_cmd_stance, all_cmd_countdown, traj_starts
             )
 
-        # Report memory every 50 samples
-        # if successful_samples % 50 == 0:
-        #     current_memory = get_memory_usage()
-        #     memory_delta = current_memory - initial_memory
-        #     print(f"  [Memory after GC] {current_memory:.2f} MB (Δ{memory_delta:+.2f} MB)")
-
         # Optionally plot this trajectory (every Nth sample to avoid too many plots)
         if successful_samples % 1 == 0:  # Plot every 5th successful sample
             print(f"  Plotting trajectory {successful_samples}...")
@@ -1049,6 +1043,10 @@ def main():
             traj_cmd_countdown = np.vstack([
                 wait_data_before["cmd_countdown"], step1_data["cmd_countdown"], wait_data_mid["cmd_countdown"],
                 step2_data["cmd_countdown"], wait_data_after["cmd_countdown"]
+            ])
+            traj_com_rpy = np.vstack([
+                wait_data_before["qd"], step1_data["qd"], wait_data_mid["qd"],
+                step2_data["qd"], wait_data_after["qd"]
             ])
             # Extract COM and feet
             com_traj = extract_com_from_trajectory(robot, traj_q, 0, len(traj_q))
@@ -1189,9 +1187,17 @@ def main():
             ax.legend()
             ax.grid(True, alpha=0.3)
 
-            # Empty subplot (or additional data)
+             # COM velocity (world frame)
             ax = axes[4, 1]
-            ax.axis('off')
+            add_countdown_background(ax, time_steps, traj_cmd_countdown)
+            ax.plot(time_steps, traj_com_rpy[:, 3], 'r-', linewidth=1.5, alpha=0.7, label='COM Roll')
+            ax.plot(time_steps, traj_com_rpy[:, 4], 'g-', linewidth=1.5, alpha=0.7, label='COM Pitch')
+            ax.plot(time_steps, traj_com_rpy[:, 5], 'b-', linewidth=1.5, alpha=0.7, label='COM Yaw')
+            ax.set_xlabel('Time Step')
+            ax.set_ylabel('Radian')
+            ax.set_title('COM RPY')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
 
             plt.tight_layout()
             plot_file = os.path.join(SCRIPT_DIR, f"velocity_sample_{successful_samples}.png")

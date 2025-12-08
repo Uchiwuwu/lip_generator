@@ -111,7 +111,7 @@ class SimpleBipedGaitProblem:
                 timeStep,
                 [self.rfId, self.lfId],
                 comTask=comRef,  # Keep COM at comRef throughout initial phase
-                comWeight=1e7  # Higher weight for stability
+                comWeight=5e7  # Higher weight for stability
             )
             for k in range(supportKnots)
         ]
@@ -152,7 +152,7 @@ class SimpleBipedGaitProblem:
                     timeStep,
                     [self.rfId, self.lfId],
                     comTask=final_swing_com_3d,
-                    comWeight=1e7
+                    comWeight=5e7
                 )
                 for k in range(transitionKnots)
             ]
@@ -206,7 +206,7 @@ class SimpleBipedGaitProblem:
                     timeStep,
                     [self.rfId, self.lfId],
                     comTask=final_swing_com_3d,
-                    comWeight=1e7
+                    comWeight=5e7
                 )
                 for k in range(transitionKnots)
             ]
@@ -237,7 +237,7 @@ class SimpleBipedGaitProblem:
                 timeStep,
                 [self.rfId, self.lfId],
                 comTask=com_final,
-                comWeight=5e6
+                comWeight=5e7
             )
             for k in range(transitionKnots)
         ]
@@ -669,8 +669,8 @@ class SimpleBipedGaitProblem:
             [500.0] * 3 +                      # base orientation
             [100.0] * num_upper_body +          # upper body joints - HIGHER weight (1.0 instead of 0.01)
             [0.01] * num_leg_joints +          # leg joints (normal 0.01)
-            [10] * 3 +                         # base linear velocity
-            [1e3] * 3 +                        # base angular velocity - VERY HIGH
+            [100] * 3 +                         # base linear velocity
+            [5e3] * 3 +                        # base angular velocity - VERY HIGH
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
@@ -826,8 +826,8 @@ class SimpleBipedGaitProblem:
             [5e3] * 3 +                        # base orientation
             [5e3] * num_upper_body +          # upper body joints - HIGHER weight
             [0.01] * num_leg_joints +          # leg joints (normal 0.01)
-            [10] * 3 +                         # base linear velocity
-            [1e3] * 3 +                         # base angular velocity
+            [100] * 3 +                         # base linear velocity
+            [5e3] * 3 +                         # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
@@ -917,8 +917,8 @@ class SimpleBipedGaitProblem:
             [5e3] * 3 +                        # base orientation
             [5e3] * num_upper_body +          # upper body joints - HIGHER weight
             [0.01] * num_leg_joints +          # leg joints (normal 0.01)
-            [10] * 3 +                         # base linear velocity
-            [1e3] * 3 +                         # base angular velocity
+            [100] * 3 +                         # base linear velocity
+            [5e3] * 3 +                         # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
