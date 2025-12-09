@@ -664,12 +664,25 @@ class SimpleBipedGaitProblem:
         num_upper_body = 17
         num_leg_joints = self.state.nv - 6 - num_upper_body
 
+        # Create leg joint weights with higher penalty for hip roll joints
+        # Leg structure: [Hip_Pitch, Hip_Roll, Hip_Yaw, Knee_Pitch, Ankle_Pitch, Ankle_Roll] x 2 legs
+        leg_joint_weights = []
+        for leg in range(2):  # Left and right legs
+            leg_joint_weights += [
+                0.01,    # Hip_Pitch
+                50.0,    # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.01,    # Hip_Yaw
+                0.001,   # Knee_Pitch - LOWER weight to allow more bending
+                0.01,    # Ankle_Pitch
+                0.01,    # Ankle_Roll
+            ]
+
         stateWeights = np.array(
             [0] * 3 +                          # base position (free)
             [500.0] * 3 +                      # base orientation
-            [100.0] * num_upper_body +          # upper body joints - HIGHER weight (1.0 instead of 0.01)
-            [0.01] * num_leg_joints +          # leg joints (normal 0.01)
-            [100] * 3 +                         # base linear velocity
+            [100.0] * num_upper_body +         # upper body joints - HIGHER weight
+            leg_joint_weights +                # leg joints with higher hip roll weight
+            [100] * 3 +                        # base linear velocity
             [5e3] * 3 +                        # base angular velocity - VERY HIGH
             [10] * (self.state.nv - 6)         # joint velocities
         )
@@ -821,13 +834,25 @@ class SimpleBipedGaitProblem:
         num_upper_body = 17
         num_leg_joints = self.state.nv - 6 - num_upper_body
 
+        # Create leg joint weights with higher penalty for hip roll joints
+        leg_joint_weights = []
+        for leg in range(2):  # Left and right legs
+            leg_joint_weights += [
+                0.01,    # Hip_Pitch
+                50.0,    # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.01,    # Hip_Yaw
+                0.001,   # Knee_Pitch - LOWER weight to allow more bending
+                0.01,    # Ankle_Pitch
+                0.01,    # Ankle_Roll
+            ]
+
         stateWeights = np.array(
             [0.0] * 3 +                        # base position
             [5e3] * 3 +                        # base orientation
-            [5e3] * num_upper_body +          # upper body joints - HIGHER weight
-            [0.01] * num_leg_joints +          # leg joints (normal 0.01)
-            [100] * 3 +                         # base linear velocity
-            [5e3] * 3 +                         # base angular velocity
+            [5e3] * num_upper_body +           # upper body joints - HIGHER weight
+            leg_joint_weights +                # leg joints with higher hip roll weight
+            [100] * 3 +                        # base linear velocity
+            [5e3] * 3 +                        # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
@@ -912,13 +937,25 @@ class SimpleBipedGaitProblem:
         num_upper_body = 17
         num_leg_joints = self.rmodel.nv - 6 - num_upper_body
 
+        # Create leg joint weights with higher penalty for hip roll joints
+        leg_joint_weights = []
+        for leg in range(2):  # Left and right legs
+            leg_joint_weights += [
+                0.1,     # Hip_Pitch
+                50.0,    # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.1,     # Hip_Yaw
+                0.01,    # Knee_Pitch - LOWER weight to allow more bending
+                0.1,     # Ankle_Pitch
+                0.1,     # Ankle_Roll
+            ]
+
         stateWeights = np.array(
             [0.0] * 3 +                        # base position
             [5e3] * 3 +                        # base orientation
-            [5e3] * num_upper_body +          # upper body joints - HIGHER weight
-            [0.01] * num_leg_joints +          # leg joints (normal 0.01)
-            [100] * 3 +                         # base linear velocity
-            [5e3] * 3 +                         # base angular velocity
+            [5e3] * num_upper_body +           # upper body joints - HIGHER weight
+            leg_joint_weights +                # leg joints with higher hip roll weight
+            [100] * 3 +                        # base linear velocity
+            [5e3] * 3 +                        # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
