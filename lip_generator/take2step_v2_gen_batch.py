@@ -44,7 +44,8 @@ SUPPORT_KNOTS = 20  # Increased from 10 for smoother and more accurate COM trans
 TRANSITION_KNOTS = 10  # Knots for post-swing COM centering phase
 COM_SHIFT_RATIO = 0.7  # Ratio of COM shift towards center during swing (0.8 = 80%)
 INITIAL_COM_SHIFT = 0.5  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
-WITHDISPLAY = True
+WITHDISPLAY = False
+PLOT = 0
 CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
 
 # Step generation parameters
@@ -57,7 +58,7 @@ GRID_Y_STEPS = 3  # Number of steps in y direction
 GRID_YAW_STEPS = 3  # Number of steps in yaw direction
 X_STEP_UNIT = 0.1
 Y_STEP_UNIT = 0.05
-Y_OFFSET = 0.2
+Y_OFFSET = 0.17
 YAW_STEP_UNIT = 0.2
 
 # Solver parameters
@@ -89,7 +90,7 @@ def load_robot():
         [
             0,
             0,
-            0.665,  # base position
+            0.645,  # base position (lowered from 0.665)
             0,
             0,
             0,
@@ -111,18 +112,18 @@ def load_robot():
             0.0,
             0.0,  # right arm
             0,  # head
-            -0.2,
+            -0.4,  # left hip pitch (changed from -0.2)
             0.007658,
             0,
-            0.4,
-            -0.25,
-            0,  # left leg (hip roll adjusted for 0.22m foot spacing)
-            -0.2,
+            0.6,  # left knee (changed from 0.4)
+            -0.2,  # left ankle pitch (changed from -0.25)
+            0,  # left leg
+            -0.4,  # right hip pitch (changed from -0.2)
             -0.007658,
             0,
-            0.4,
-            -0.25,
-            0,  # right leg (hip roll adjusted for 0.22m foot spacing)
+            0.6,  # right knee (changed from 0.4)
+            -0.2,  # right ankle pitch (changed from -0.25)
+            0,  # right leg
         ]
     )
     robot.model.referenceConfigurations["half_sitting"] = half_sitting
@@ -1028,213 +1029,218 @@ def main():
                 all_cmd_stance, all_cmd_countdown, traj_starts
             )
 
-        # # Optionally plot this trajectory (every Nth sample to avoid too many plots)
-        # if successful_samples % 1 == 0:  # Plot every 5th successful sample
-        #     print(f"  Plotting trajectory {successful_samples}...")
-        #     # Combine all data for this trajectory
-        #     traj_q = np.vstack([
-        #         wait_data_before["q"], step1_data["q"], wait_data_mid["q"],
-        #         step2_data["q"], wait_data_after["q"]
-        #     ])
-        #     traj_v_b = np.vstack([
-        #         wait_data_before["v_b"], step1_data["v_b"], wait_data_mid["v_b"],
-        #         step2_data["v_b"], wait_data_after["v_b"]
-        #     ])
-        #     traj_cmd_countdown = np.vstack([
-        #         wait_data_before["cmd_countdown"], step1_data["cmd_countdown"], wait_data_mid["cmd_countdown"],
-        #         step2_data["cmd_countdown"], wait_data_after["cmd_countdown"]
-        #     ])
-        #     traj_com_rpy = np.vstack([
-        #         wait_data_before["qd"], step1_data["qd"], wait_data_mid["qd"],
-        #         step2_data["qd"], wait_data_after["qd"]
-        #     ])
-        #     # Extract COM and feet
-        #     com_traj = extract_com_from_trajectory(robot, traj_q, 0, len(traj_q))
-        #     lf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "left_foot_link")
-        #     rf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "right_foot_link")
+        # Optionally plot this trajectory (every Nth sample to avoid too many plots)
+        if PLOT:
+            if successful_samples % PLOT == 0:  # Plot every 5th successful sample
+                print(f"  Plotting trajectory {successful_samples}...")
+                # Combine all data for this trajectory
+                traj_q = np.vstack([
+                    wait_data_before["q"], step1_data["q"], wait_data_mid["q"],
+                    step2_data["q"], wait_data_after["q"]
+                ])
+                traj_v_b = np.vstack([
+                    wait_data_before["v_b"], step1_data["v_b"], wait_data_mid["v_b"],
+                    step2_data["v_b"], wait_data_after["v_b"]
+                ])
+                traj_cmd_countdown = np.vstack([
+                    wait_data_before["cmd_countdown"], step1_data["cmd_countdown"], wait_data_mid["cmd_countdown"],
+                    step2_data["cmd_countdown"], wait_data_after["cmd_countdown"]
+                ])
+                traj_com_rpy = np.vstack([
+                    wait_data_before["qd"], step1_data["qd"], wait_data_mid["qd"],
+                    step2_data["qd"], wait_data_after["qd"]
+                ])
+                traj_T_wbase = np.vstack([
+                    wait_data_before["T_wbase"], step1_data["T_wbase"], wait_data_mid["T_wbase"],
+                    step2_data["T_wbase"], wait_data_after["T_wbase"]
+                ])
+                # Extract COM and feet
+                com_traj = extract_com_from_trajectory(robot, traj_q, 0, len(traj_q))
+                lf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "left_foot_link")
+                rf_traj = extract_feet_from_trajectory(robot, traj_q, 0, len(traj_q), "right_foot_link")
 
-        #     # Compute foot velocities in world frame
-        #     lf_vel = extract_foot_velocity_from_trajectory(lf_traj, TIME_STEP)
-        #     rf_vel = extract_foot_velocity_from_trajectory(rf_traj, TIME_STEP)
+                # Compute foot velocities in world frame
+                lf_vel = extract_foot_velocity_from_trajectory(lf_traj, TIME_STEP)
+                rf_vel = extract_foot_velocity_from_trajectory(rf_traj, TIME_STEP)
 
-        #     # Plot
-        #     fig, axes = plt.subplots(6, 2, figsize=(14, 24))
-        #     fig.suptitle(f"Trajectory Analysis - Sample {i+1}, Successful #{successful_samples}", fontsize=14, fontweight='bold')
-        #     time_steps = np.arange(len(com_traj))
+                # Plot
+                fig, axes = plt.subplots(6, 2, figsize=(14, 24))
+                fig.suptitle(f"Trajectory Analysis - Sample {i+1}, Successful #{successful_samples}", fontsize=14, fontweight='bold')
+                time_steps = np.arange(len(com_traj))
 
-        #     # Extract hip roll joint angles (config indices: 25=left, 31=right)
-        #     left_hip_roll = traj_q[:, 25]
-        #     right_hip_roll = traj_q[:, 31]
+                # Extract hip roll joint angles (config indices: 25=left, 31=right)
+                left_hip_roll = traj_q[:, 25]
+                right_hip_roll = traj_q[:, 31]
 
-        #     # Helper function to add countdown as dashed lines
-        #     def add_countdown_background(ax, time_steps, countdown):
-        #         """Add dashed line overlay for countdown (active stepping phase)"""
-        #         # Plot countdown as dashed lines on secondary y-axis
-        #         ax2 = ax.twinx()
-        #         ax2.plot(time_steps, countdown[:, 0], 'k--', linewidth=1.5, alpha=0.5, label='Countdown')
-        #         ax2.set_ylabel('Countdown', alpha=0.5)
-        #         ax2.set_ylim(-0.1, 1.1)
-        #         ax2.tick_params(axis='y', labelcolor='black', labelsize=8)
-        #         ax2.spines['right'].set_alpha(0.3)
+                # Helper function to add countdown as dashed lines
+                def add_countdown_background(ax, time_steps, countdown):
+                    """Add dashed line overlay for countdown (active stepping phase)"""
+                    # Plot countdown as dashed lines on secondary y-axis
+                    ax2 = ax.twinx()
+                    ax2.plot(time_steps, countdown[:, 0], 'k--', linewidth=1.5, alpha=0.5, label='Countdown')
+                    ax2.set_ylabel('Countdown', alpha=0.5)
+                    ax2.set_ylim(-0.1, 1.1)
+                    ax2.tick_params(axis='y', labelcolor='black', labelsize=8)
+                    ax2.spines['right'].set_alpha(0.3)
 
-        #     # XY plane (top-down view)
-        #     ax = axes[0, 0]
-        #     ax.plot(com_traj[:, 0], com_traj[:, 1], 'b-', linewidth=2, label='COM')
-        #     ax.plot(lf_traj[:, 0], lf_traj[:, 1], 'r--', linewidth=2, label='Left Foot')
-        #     ax.plot(rf_traj[:, 0], rf_traj[:, 1], 'g--', linewidth=2, label='Right Foot')
-        #     ax.plot(com_traj[0, 0], com_traj[0, 1], 'bo', markersize=8, label='Start')
-        #     ax.plot(com_traj[-1, 0], com_traj[-1, 1], 'bs', markersize=8, label='End')
-        #     ax.set_xlabel('X (m)')
-        #     ax.set_ylabel('Y (m)')
-        #     ax.set_title('Top-Down View (XY Plane)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
-        #     ax.axis('equal')
+                # XY plane (top-down view)
+                ax = axes[0, 0]
+                ax.plot(com_traj[:, 0], com_traj[:, 1], 'b-', linewidth=2, label='COM')
+                ax.plot(lf_traj[:, 0], lf_traj[:, 1], 'r--', linewidth=2, label='Left Foot')
+                ax.plot(rf_traj[:, 0], rf_traj[:, 1], 'g--', linewidth=2, label='Right Foot')
+                ax.plot(com_traj[0, 0], com_traj[0, 1], 'bo', markersize=8, label='Start')
+                ax.plot(com_traj[-1, 0], com_traj[-1, 1], 'bs', markersize=8, label='End')
+                ax.set_xlabel('X (m)')
+                ax.set_ylabel('Y (m)')
+                ax.set_title('Top-Down View (XY Plane)')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                ax.axis('equal')
 
-        #     # X position over time
-        #     ax = axes[0, 1]
-        #     add_countdown_background(ax, time_steps, traj_cmd_countdown)
-        #     ax.plot(time_steps, com_traj[:, 0], 'b-', linewidth=2, label='COM X')
-        #     ax.plot(time_steps, lf_traj[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='LF X')
-        #     ax.plot(time_steps, rf_traj[:, 0], 'g--', linewidth=1.5, alpha=0.7, label='RF X')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('X Position (m)')
-        #     ax.set_title('Forward/Backward Motion')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+                # X position over time
+                ax = axes[0, 1]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, com_traj[:, 0], 'b-', linewidth=2, label='COM X')
+                ax.plot(time_steps, lf_traj[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='LF X')
+                ax.plot(time_steps, rf_traj[:, 0], 'g--', linewidth=1.5, alpha=0.7, label='RF X')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('X Position (m)')
+                ax.set_title('Forward/Backward Motion')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
-        #     # Y position over time (lateral lean - CRITICAL)
-        #     ax = axes[1, 0]
-        #     add_countdown_background(ax, time_steps, traj_cmd_countdown)
-        #     ax.plot(time_steps, com_traj[:, 1], 'b-', linewidth=2.5, label='COM Y')
-        #     ax.plot(time_steps, lf_traj[:, 1], 'r--', linewidth=1.5, alpha=0.7, label='LF Y')
-        #     ax.plot(time_steps, rf_traj[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='RF Y')
-        #     ax.fill_between(time_steps, lf_traj[:, 1], rf_traj[:, 1], alpha=0.1, color='gray')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Y Position (m)')
-        #     ax.set_title('Lateral Lean (CRITICAL)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+                # Y position over time (lateral lean - CRITICAL)
+                ax = axes[1, 0]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, com_traj[:, 1], 'b-', linewidth=2.5, label='COM Y')
+                ax.plot(time_steps, lf_traj[:, 1], 'r--', linewidth=1.5, alpha=0.7, label='LF Y')
+                ax.plot(time_steps, rf_traj[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='RF Y')
+                ax.fill_between(time_steps, lf_traj[:, 1], rf_traj[:, 1], alpha=0.1, color='gray')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Y Position (m)')
+                ax.set_title('Lateral Lean (CRITICAL)')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
-        #     # Z position over time (height)
-        #     ax = axes[1, 1]
-        #     add_countdown_background(ax, time_steps, traj_cmd_countdown)
-        #     ax.plot(time_steps, com_traj[:, 2], 'b-', linewidth=2, label='COM Z')
-        #     ax.plot(time_steps, lf_traj[:, 2], 'r--', linewidth=1.5, alpha=0.7, label='LF Z')
-        #     ax.plot(time_steps, rf_traj[:, 2], 'g--', linewidth=1.5, alpha=0.7, label='RF Z')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Height (m)')
-        #     ax.set_title('Vertical Motion')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+                # Z position over time (height)
+                ax = axes[1, 1]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, traj_T_wbase[:, 2], 'b-', linewidth=2, label='Base Z')
+                ax.plot(time_steps, lf_traj[:, 2], 'r--', linewidth=1.5, alpha=0.7, label='LF Z')
+                ax.plot(time_steps, rf_traj[:, 2], 'g--', linewidth=1.5, alpha=0.7, label='RF Z')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Height (m)')
+                ax.set_title('Vertical Motion (Base Height)')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
-        #     # Left foot velocity (world frame)
-        #     ax = axes[2, 0]
-        #     add_countdown_background(ax, time_steps, traj_cmd_countdown)
-        #     ax.plot(time_steps, lf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='LF Vel X')
-        #     ax.plot(time_steps, lf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='LF Vel Y')
-        #     ax.plot(time_steps, lf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='LF Vel Z')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Velocity (m/s)')
-        #     ax.set_title('Left Foot Velocity (World Frame)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+                # Left foot velocity (world frame)
+                ax = axes[2, 0]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, lf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='LF Vel X')
+                ax.plot(time_steps, lf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='LF Vel Y')
+                ax.plot(time_steps, lf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='LF Vel Z')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Velocity (m/s)')
+                ax.set_title('Left Foot Velocity (World Frame)')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
-        #     # Right foot velocity (world frame)
-        #     ax = axes[2, 1]
-        #     add_countdown_background(ax, time_steps, traj_cmd_countdown)
-        #     ax.plot(time_steps, rf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='RF Vel X')
-        #     ax.plot(time_steps, rf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='RF Vel Y')
-        #     ax.plot(time_steps, rf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='RF Vel Z')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Velocity (m/s)')
-        #     ax.set_title('Right Foot Velocity (World Frame)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+                # Right foot velocity (world frame)
+                ax = axes[2, 1]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, rf_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='RF Vel X')
+                ax.plot(time_steps, rf_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='RF Vel Y')
+                ax.plot(time_steps, rf_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='RF Vel Z')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Velocity (m/s)')
+                ax.set_title('Right Foot Velocity (World Frame)')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
-        #     # Base linear velocity (base frame)
-        #     ax = axes[3, 0]
-        #     add_countdown_background(ax, time_steps, traj_cmd_countdown)
-        #     base_vel_linear = traj_v_b[:, :3]
-        #     ax.plot(time_steps, base_vel_linear[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base Vel X')
-        #     ax.plot(time_steps, base_vel_linear[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base Vel Y')
-        #     ax.plot(time_steps, base_vel_linear[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base Vel Z')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Velocity (m/s)')
-        #     ax.set_title('Base Linear Velocity (Base Frame)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+                # Base linear velocity (base frame)
+                ax = axes[3, 0]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                base_vel_linear = traj_v_b[:, :3]
+                ax.plot(time_steps, base_vel_linear[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base Vel X')
+                ax.plot(time_steps, base_vel_linear[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base Vel Y')
+                ax.plot(time_steps, base_vel_linear[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base Vel Z')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Velocity (m/s)')
+                ax.set_title('Base Linear Velocity (Base Frame)')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
-        #     # Base angular velocity (base frame)
-        #     ax = axes[3, 1]
-        #     add_countdown_background(ax, time_steps, traj_cmd_countdown)
-        #     base_vel_angular = traj_v_b[:, 3:]
-        #     ax.plot(time_steps, base_vel_angular[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base ω X')
-        #     ax.plot(time_steps, base_vel_angular[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base ω Y')
-        #     ax.plot(time_steps, base_vel_angular[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base ω Z')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Angular Velocity (rad/s)')
-        #     ax.set_title('Base Angular Velocity (Base Frame)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+                # Base angular velocity (base frame)
+                ax = axes[3, 1]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                base_vel_angular = traj_v_b[:, 3:]
+                ax.plot(time_steps, base_vel_angular[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Base ω X')
+                ax.plot(time_steps, base_vel_angular[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Base ω Y')
+                ax.plot(time_steps, base_vel_angular[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='Base ω Z')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Angular Velocity (rad/s)')
+                ax.set_title('Base Angular Velocity (Base Frame)')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
-        #     # COM velocity (world frame)
-        #     ax = axes[4, 0]
-        #     add_countdown_background(ax, time_steps, traj_cmd_countdown)
-        #     com_vel = extract_foot_velocity_from_trajectory(com_traj, TIME_STEP)
-        #     ax.plot(time_steps, com_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='COM Vel X')
-        #     ax.plot(time_steps, com_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='COM Vel Y')
-        #     ax.plot(time_steps, com_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='COM Vel Z')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Velocity (m/s)')
-        #     ax.set_title('COM Velocity (World Frame)')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+                # COM velocity (world frame)
+                ax = axes[4, 0]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                com_vel = extract_foot_velocity_from_trajectory(com_traj, TIME_STEP)
+                ax.plot(time_steps, com_vel[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='COM Vel X')
+                ax.plot(time_steps, com_vel[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='COM Vel Y')
+                ax.plot(time_steps, com_vel[:, 2], 'b-', linewidth=1.5, alpha=0.7, label='COM Vel Z')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Velocity (m/s)')
+                ax.set_title('COM Velocity (World Frame)')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
-        #      # COM RPY
-        #     ax = axes[4, 1]
-        #     add_countdown_background(ax, time_steps, traj_cmd_countdown)
-        #     ax.plot(time_steps, traj_com_rpy[:, 3], 'r-', linewidth=1.5, alpha=0.7, label='COM Roll')
-        #     ax.plot(time_steps, traj_com_rpy[:, 4], 'g-', linewidth=1.5, alpha=0.7, label='COM Pitch')
-        #     ax.plot(time_steps, traj_com_rpy[:, 5], 'b-', linewidth=1.5, alpha=0.7, label='COM Yaw')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Radian')
-        #     ax.set_title('COM RPY')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+                # COM RPY
+                ax = axes[4, 1]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, traj_com_rpy[:, 3], 'r-', linewidth=1.5, alpha=0.7, label='COM Roll')
+                ax.plot(time_steps, traj_com_rpy[:, 4], 'g-', linewidth=1.5, alpha=0.7, label='COM Pitch')
+                ax.plot(time_steps, traj_com_rpy[:, 5], 'b-', linewidth=1.5, alpha=0.7, label='COM Yaw')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Radian')
+                ax.set_title('COM RPY')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
-        #     # Hip Roll Angles
-        #     ax = axes[5, 0]
-        #     add_countdown_background(ax, time_steps, traj_cmd_countdown)
-        #     ax.plot(time_steps, left_hip_roll, 'r-', linewidth=2, label='Left Hip Roll')
-        #     ax.plot(time_steps, right_hip_roll, 'b-', linewidth=2, label='Right Hip Roll')
-        #     ax.axhline(y=0.007658, color='r', linestyle='--', linewidth=1, alpha=0.5, label='Left Target')
-        #     ax.axhline(y=-0.007658, color='b', linestyle='--', linewidth=1, alpha=0.5, label='Right Target')
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Hip Roll Angle (rad)')
-        #     ax.set_title('Hip Roll Joint Angles')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+                # Hip Roll Angles
+                ax = axes[5, 0]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, left_hip_roll, 'r-', linewidth=2, label='Left Hip Roll')
+                ax.plot(time_steps, right_hip_roll, 'b-', linewidth=2, label='Right Hip Roll')
+                ax.axhline(y=0.007658, color='r', linestyle='--', linewidth=1, alpha=0.5, label='Left Target')
+                ax.axhline(y=-0.007658, color='b', linestyle='--', linewidth=1, alpha=0.5, label='Right Target')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Hip Roll Angle (rad)')
+                ax.set_title('Hip Roll Joint Angles')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
-        #     # Hip Roll Deviation from Initial
-        #     ax = axes[5, 1]
-        #     add_countdown_background(ax, time_steps, traj_cmd_countdown)
-        #     left_deviation = left_hip_roll - 0.007658
-        #     right_deviation = right_hip_roll - (-0.007658)
-        #     ax.plot(time_steps, left_deviation * 1000, 'r-', linewidth=2, label='Left Hip Roll Deviation')
-        #     ax.plot(time_steps, right_deviation * 1000, 'b-', linewidth=2, label='Right Hip Roll Deviation')
-        #     ax.axhline(y=0, color='k', linestyle='-', linewidth=1, alpha=0.3)
-        #     ax.set_xlabel('Time Step')
-        #     ax.set_ylabel('Deviation (milliradians)')
-        #     ax.set_title('Hip Roll Deviation from Initial Pose')
-        #     ax.legend()
-        #     ax.grid(True, alpha=0.3)
+                # Hip Roll Deviation from Initial
+                ax = axes[5, 1]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                left_deviation = left_hip_roll - 0.007658
+                right_deviation = right_hip_roll - (-0.007658)
+                ax.plot(time_steps, left_deviation * 1000, 'r-', linewidth=2, label='Left Hip Roll Deviation')
+                ax.plot(time_steps, right_deviation * 1000, 'b-', linewidth=2, label='Right Hip Roll Deviation')
+                ax.axhline(y=0, color='k', linestyle='-', linewidth=1, alpha=0.3)
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Deviation (milliradians)')
+                ax.set_title('Hip Roll Deviation from Initial Pose')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
-        #     plt.tight_layout()
-        #     plot_file = os.path.join(SCRIPT_DIR, f"velocity_sample_{successful_samples}.png")
-        #     plt.savefig(plot_file, dpi=150, bbox_inches='tight')
-        #     print(f"  Saved: {plot_file}")
-        #     plt.close(fig)
+                plt.tight_layout()
+                plot_file = os.path.join(SCRIPT_DIR, f"velocity_sample_{successful_samples}.png")
+                plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+                print(f"  Saved: {plot_file}")
+                plt.close(fig)
 
     # Remove last element (it's one past the end)
     traj_starts = traj_starts[:-1]

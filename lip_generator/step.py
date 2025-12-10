@@ -91,8 +91,8 @@ class SimpleBipedGaitProblem:
 
         # Compute CoM reference between current foot positions
         comRef = (rfPos0 + lfPos0) / 2
-        comRef[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2] + 0.1
-
+        comRef[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2] -0.2 # Removed +0.1 to maintain initial height
+        # print(comRef)
         # Determine which foot needs to move
         leftFootTarget = np.array(leftFootTarget)
         rightFootTarget = np.array(rightFootTarget)
@@ -102,20 +102,35 @@ class SimpleBipedGaitProblem:
 
         loco3dModel = []
 
-        # Initial double support phase - shift COM to prepare for swing
-        # The final position of this phase should match comRef used in swing phase
+        # Determine stance foot and calculate initial COM shift
         com_initial = pinocchio.centerOfMass(self.rmodel, self.rdata, q0).copy()
+        if leftFootMovement > rightFootMovement:
+            # Left foot swings, right foot is stance - shift COM toward right foot
+            stance_foot_pos = rfPos0
+        else:
+            # Right foot swings, left foot is stance - shift COM toward left foot
+            stance_foot_pos = lfPos0
 
+        # Calculate COM shifted toward stance foot
+        com_displacement_initial = stance_foot_pos[:2] - comRef[:2]
+        com_initial_shifted = comRef[:2] + com_displacement_initial * initialComShift
+        com_initial_shifted_3d = np.array([com_initial_shifted[0], com_initial_shifted[1], comRef[2]])
+
+        # Initial double support phase - shift COM toward stance foot to prepare for swing
         doubleSupport_initial = [
             self.createSwingFootModel(
                 timeStep,
                 [self.rfId, self.lfId],
-                comTask=comRef,  # Keep COM at comRef throughout initial phase
+                comTask=com_initial_shifted_3d,
                 comWeight=5e7  # Higher weight for stability
             )
             for k in range(supportKnots)
         ]
         loco3dModel += doubleSupport_initial
+
+        # Calculate final COM position (center between both feet)
+        com_final = (leftFootTarget + rightFootTarget) / 2
+        com_final[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
 
         # Determine which foot to move first (the one with larger movement)
         if leftFootMovement > rightFootMovement:
@@ -134,24 +149,12 @@ class SimpleBipedGaitProblem:
             )
             loco3dModel += lStep
 
-            # Add transition double support - hold COM at final swing position
-            # Calculate final COM position from swing phase (same logic as in createFootstepModelsWithTarget)
-            # The swing phase moved COM from comRef towards center of stance and landing feet
-            com_before_swing = (rfPos0 + lfPos0) / 2
-            com_before_swing[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2] + 0.1
-
-            target_center = (rfPos0 + leftFootTarget) / 2
-            target_center[2] = com_before_swing[2]
-            com_displacement = target_center[:2] - com_before_swing[:2]
-
-            final_swing_com = com_before_swing[:2] + com_displacement * comShiftRatio
-            final_swing_com_3d = np.array([final_swing_com[0], final_swing_com[1], com_before_swing[2]])
-
+            # Add transition double support - move COM to center between both feet
             doubleSupport_transition = [
                 self.createSwingFootModel(
                     timeStep,
                     [self.rfId, self.lfId],
-                    comTask=final_swing_com_3d,
+                    comTask=com_final,
                     comWeight=5e7
                 )
                 for k in range(transitionKnots)
@@ -188,24 +191,12 @@ class SimpleBipedGaitProblem:
             )
             loco3dModel += rStep
 
-            # Add transition double support - hold COM at final swing position
-            # Calculate final COM position from swing phase (same logic as in createFootstepModelsWithTarget)
-            # The swing phase moved COM from comRef towards center of stance and landing feet
-            com_before_swing = (rfPos0 + lfPos0) / 2
-            com_before_swing[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2] + 0.1
-
-            target_center = (lfPos0 + rightFootTarget) / 2
-            target_center[2] = com_before_swing[2]
-            com_displacement = target_center[:2] - com_before_swing[:2]
-
-            final_swing_com = com_before_swing[:2] + com_displacement * comShiftRatio
-            final_swing_com_3d = np.array([final_swing_com[0], final_swing_com[1], com_before_swing[2]])
-
+            # Add transition double support - move COM to center between both feet
             doubleSupport_transition = [
                 self.createSwingFootModel(
                     timeStep,
                     [self.rfId, self.lfId],
-                    comTask=final_swing_com_3d,
+                    comTask=com_final,
                     comWeight=5e7
                 )
                 for k in range(transitionKnots)
@@ -226,22 +217,6 @@ class SimpleBipedGaitProblem:
             #         targetYaw,
             #     )
             #     loco3dModel += lStep
-
-        # Final double support phase - keep COM at center between final feet
-        # Since transition doesn't shift anymore, COM is already centered
-        com_final = (leftFootTarget + rightFootTarget) / 2
-        com_final[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
-
-        doubleSupport_final = [
-            self.createSwingFootModel(
-                timeStep,
-                [self.rfId, self.lfId],
-                comTask=com_final,
-                comWeight=5e7
-            )
-            for k in range(transitionKnots)
-        ]
-        loco3dModel += doubleSupport_final
 
         return crocoddyl.ShootingProblem(x0, loco3dModel[:-1], loco3dModel[-1])
 
@@ -678,11 +653,11 @@ class SimpleBipedGaitProblem:
             ]
 
         stateWeights = np.array(
-            [0] * 3 +                          # base position (free)
-            [500.0] * 3 +                      # base orientation
+            [0, 0, 0] +                          # base position (free)
+            [5e3] * 3 +                      # base orientation
             [100.0] * num_upper_body +         # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
-            [100] * 3 +                        # base linear velocity
+            [100, 100, 1e3] +                        # base linear velocity
             [5e3] * 3 +                        # base angular velocity - VERY HIGH
             [10] * (self.state.nv - 6)         # joint velocities
         )
@@ -847,11 +822,11 @@ class SimpleBipedGaitProblem:
             ]
 
         stateWeights = np.array(
-            [0.0] * 3 +                        # base position
+            [0, 0, 0] +                        # base position
             [5e3] * 3 +                        # base orientation
             [5e3] * num_upper_body +           # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
-            [100] * 3 +                        # base linear velocity
+            [100, 100, 1e3] +                        # base linear velocity
             [5e3] * 3 +                        # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
@@ -950,11 +925,11 @@ class SimpleBipedGaitProblem:
             ]
 
         stateWeights = np.array(
-            [0.0] * 3 +                        # base position
+            [0, 0, 0]+                        # base position
             [5e3] * 3 +                        # base orientation
             [5e3] * num_upper_body +           # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
-            [100] * 3 +                        # base linear velocity
+            [100, 100, 1e3] +                        # base linear velocity
             [5e3] * 3 +                        # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
