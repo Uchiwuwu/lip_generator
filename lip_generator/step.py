@@ -706,11 +706,11 @@ class SimpleBipedGaitProblem:
 
         stateWeights = np.array(
             [0, 0, 0] +                          # base position (free)
-            [5e3] * 3 +                      # base orientation
+            [5e3, 5e3, 100] +                      # base orientation
             [100.0] * num_upper_body +         # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
             [100, 100, 1e3] +                        # base linear velocity
-            [5e3] * 3 +                        # base angular velocity - VERY HIGH
+            [5e3, 5e3, 100] +                        # base angular velocity - VERY HIGH
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
@@ -875,11 +875,11 @@ class SimpleBipedGaitProblem:
 
         stateWeights = np.array(
             [0, 0, 0] +                        # base position
-            [5e3] * 3 +                        # base orientation
+            [5e3, 5e3, 100] +                        # base orientation
             [5e3] * num_upper_body +           # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
             [100, 100, 1e3] +                        # base linear velocity
-            [5e3] * 3 +                        # base angular velocity
+            [5e3, 5e3, 100] +                        # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
@@ -978,11 +978,11 @@ class SimpleBipedGaitProblem:
 
         stateWeights = np.array(
             [0, 0, 0]+                        # base position
-            [5e3] * 3 +                        # base orientation
+            [5e3, 5e3, 100] +                        # base orientation
             [5e3] * num_upper_body +           # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
             [100, 100, 1e3] +                        # base linear velocity
-            [5e3] * 3 +                        # base angular velocity
+            [5e3, 5e3, 100] +                        # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
