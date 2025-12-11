@@ -82,12 +82,18 @@ class SimpleBipedGaitProblem:
         # Default transitionKnots to supportKnots if not specified
         if transitionKnots is None:
             transitionKnots = supportKnots
-        # Compute the current foot positions
+        # Compute the current foot positions and orientations
         q0 = x0[: self.state.nq]
         pinocchio.forwardKinematics(self.rmodel, self.rdata, q0)
         pinocchio.updateFramePlacements(self.rmodel, self.rdata)
         rfPos0 = self.rdata.oMf[self.rfId].translation
         lfPos0 = self.rdata.oMf[self.lfId].translation
+        # Get initial yaw angles of both feet in world frame
+        rfRot0 = self.rdata.oMf[self.rfId].rotation
+        lfRot0 = self.rdata.oMf[self.lfId].rotation
+        # Extract yaw from rotation matrix (yaw = atan2(R[1,0], R[0,0]))
+        rfYaw0 = np.arctan2(rfRot0[1, 0], rfRot0[0, 0])
+        lfYaw0 = np.arctan2(lfRot0[1, 0], lfRot0[0, 0])
 
         # Compute CoM reference between current foot positions
         comRef = (rfPos0 + lfPos0) / 2
@@ -149,9 +155,9 @@ class SimpleBipedGaitProblem:
             )
             loco3dModel += lStep
 
-            # Calculate average yaw from both feet for base orientation
-            # Left foot moved with targetYaw, right foot stayed at 0
-            avg_yaw = targetYaw / 2.0
+            # Calculate average yaw from both feet in world frame for base orientation
+            # Left foot moved with targetYaw, right foot stayed at its initial yaw
+            avg_yaw = (targetYaw + rfYaw0) / 2.0
 
             # Add transition double support - move COM to center between both feet
             doubleSupport_transition = [
@@ -196,9 +202,9 @@ class SimpleBipedGaitProblem:
             )
             loco3dModel += rStep
 
-            # Calculate average yaw from both feet for base orientation
-            # Right foot moved with targetYaw, left foot stayed at 0
-            avg_yaw = targetYaw / 2.0
+            # Calculate average yaw from both feet in world frame for base orientation
+            # Right foot moved with targetYaw, left foot stayed at its initial yaw
+            avg_yaw = (targetYaw + lfYaw0) / 2.0
 
             # Add transition double support - move COM to center between both feet
             doubleSupport_transition = [
@@ -704,7 +710,7 @@ class SimpleBipedGaitProblem:
             [100.0] * num_upper_body +         # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
             [100, 100, 1e3] +                        # base linear velocity
-            [5e2] * 3 +                        # base angular velocity - VERY HIGH
+            [5e3] * 3 +                        # base angular velocity - VERY HIGH
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
@@ -873,7 +879,7 @@ class SimpleBipedGaitProblem:
             [5e3] * num_upper_body +           # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
             [100, 100, 1e3] +                        # base linear velocity
-            [5e2] * 3 +                        # base angular velocity
+            [5e3] * 3 +                        # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
@@ -976,7 +982,7 @@ class SimpleBipedGaitProblem:
             [5e3] * num_upper_body +           # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
             [100, 100, 1e3] +                        # base linear velocity
-            [5e2] * 3 +                        # base angular velocity
+            [5e3] * 3 +                        # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
