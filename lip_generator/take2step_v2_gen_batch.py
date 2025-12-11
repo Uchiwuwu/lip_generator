@@ -44,12 +44,12 @@ SUPPORT_KNOTS = 20  # Increased from 10 for smoother and more accurate COM trans
 TRANSITION_KNOTS = 10  # Knots for post-swing COM centering phase
 COM_SHIFT_RATIO = 0.7  # Ratio of COM shift towards center during swing (0.8 = 80%)
 INITIAL_COM_SHIFT = 0.5  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
-WITHDISPLAY = False
-PLOT = 0
+WITHDISPLAY = True
+PLOT = 1
 CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
 
 # Step generation parameters
-STEP_HEIGHT = 0.075  # Step height in meters
+STEP_HEIGHT = 0.15  # Step height in meters
 WAIT_TIME_RANGE = (0.8, 1.0)  # Waiting period before step (seconds)
 MID_WAIT_TIME_RANGE = (0.3, 0.6)  # Waiting period between two steps (seconds)
 # Grid sampling parameters
@@ -1063,14 +1063,56 @@ def main():
                 lf_vel = extract_foot_velocity_from_trajectory(lf_traj, TIME_STEP)
                 rf_vel = extract_foot_velocity_from_trajectory(rf_traj, TIME_STEP)
 
+                # Get all trajectory data
+                traj_T_blf = np.vstack([
+                    wait_data_before["T_blf"], step1_data["T_blf"], wait_data_mid["T_blf"],
+                    step2_data["T_blf"], wait_data_after["T_blf"]
+                ])
+                traj_T_brf = np.vstack([
+                    wait_data_before["T_brf"], step1_data["T_brf"], wait_data_mid["T_brf"],
+                    step2_data["T_brf"], wait_data_after["T_brf"]
+                ])
+                traj_T_stsw = np.vstack([
+                    wait_data_before["T_stsw"], step1_data["T_stsw"], wait_data_mid["T_stsw"],
+                    step2_data["T_stsw"], wait_data_after["T_stsw"]
+                ])
+                traj_cmd_footstep = np.vstack([
+                    wait_data_before["cmd_footstep"], step1_data["cmd_footstep"], wait_data_mid["cmd_footstep"],
+                    step2_data["cmd_footstep"], wait_data_after["cmd_footstep"]
+                ])
+                traj_cmd_stance = np.vstack([
+                    wait_data_before["cmd_stance"], step1_data["cmd_stance"], wait_data_mid["cmd_stance"],
+                    step2_data["cmd_stance"], wait_data_after["cmd_stance"]
+                ])
+
                 # Plot
-                fig, axes = plt.subplots(6, 2, figsize=(14, 24))
+                fig, axes = plt.subplots(10, 2, figsize=(14, 40))
                 fig.suptitle(f"Trajectory Analysis - Sample {i+1}, Successful #{successful_samples}", fontsize=14, fontweight='bold')
                 time_steps = np.arange(len(com_traj))
 
                 # Extract hip roll joint angles (config indices: 25=left, 31=right)
                 left_hip_roll = traj_q[:, 25]
                 right_hip_roll = traj_q[:, 31]
+
+                # Extract yaw angles for base and feet
+                base_yaw_traj = np.zeros(len(traj_q))
+                lf_yaw_traj = np.zeros(len(traj_q))
+                rf_yaw_traj = np.zeros(len(traj_q))
+                for t in range(len(traj_q)):
+                    q = traj_q[t]
+                    pinocchio.forwardKinematics(robot.model, rdata, q)
+                    pinocchio.updateFramePlacements(robot.model, rdata)
+
+                    # Base yaw from quaternion
+                    base_quat = q[3:7]  # [x, y, z, w]
+                    base_R = pinocchio.Quaternion(base_quat[3], base_quat[0], base_quat[1], base_quat[2]).toRotationMatrix()
+                    base_yaw_traj[t] = rotation_matrix_to_yaw(base_R)
+
+                    # Feet yaw
+                    lf_yaw_traj[t] = rotation_matrix_to_yaw(rdata.oMf[gait.lfId].rotation)
+                    rf_yaw_traj[t] = rotation_matrix_to_yaw(rdata.oMf[gait.rfId].rotation)
+
+                avg_feet_yaw = (lf_yaw_traj + rf_yaw_traj) / 2.0
 
                 # Helper function to add countdown as dashed lines
                 def add_countdown_background(ax, time_steps, countdown):
@@ -1234,6 +1276,120 @@ def main():
                 ax.set_ylabel('Deviation (milliradians)')
                 ax.set_title('Hip Roll Deviation from Initial Pose')
                 ax.legend()
+                ax.grid(True, alpha=0.3)
+
+                # T_blf (Body to Left Foot Transform)
+                ax = axes[6, 0]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, traj_T_blf[:, 0], 'r-', linewidth=1.5, label='X')
+                ax.plot(time_steps, traj_T_blf[:, 1], 'g-', linewidth=1.5, label='Y')
+                ax.plot(time_steps, traj_T_blf[:, 2], 'b-', linewidth=1.5, label='Z')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Position (m)')
+                ax.set_title('T_blf: Body to Left Foot Position')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+                # T_blf Yaw
+                ax = axes[6, 1]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, traj_T_blf[:, 3], 'k-', linewidth=2, label='Yaw')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Yaw (rad)')
+                ax.set_title('T_blf: Body to Left Foot Yaw')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+                # T_brf (Body to Right Foot Transform)
+                ax = axes[7, 0]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, traj_T_brf[:, 0], 'r-', linewidth=1.5, label='X')
+                ax.plot(time_steps, traj_T_brf[:, 1], 'g-', linewidth=1.5, label='Y')
+                ax.plot(time_steps, traj_T_brf[:, 2], 'b-', linewidth=1.5, label='Z')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Position (m)')
+                ax.set_title('T_brf: Body to Right Foot Position')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+                # T_brf Yaw
+                ax = axes[7, 1]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, traj_T_brf[:, 3], 'k-', linewidth=2, label='Yaw')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Yaw (rad)')
+                ax.set_title('T_brf: Body to Right Foot Yaw')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+                # T_stsw (Stance to Swing Transform)
+                ax = axes[8, 0]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, traj_T_stsw[:, 0], 'r-', linewidth=1.5, label='X')
+                ax.plot(time_steps, traj_T_stsw[:, 1], 'g-', linewidth=1.5, label='Y')
+                ax.plot(time_steps, traj_T_stsw[:, 2], 'b-', linewidth=1.5, label='Z')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Position (m)')
+                ax.set_title('T_stsw: Stance to Swing Foot Position')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+                # cmd_footstep and cmd_stance
+                ax = axes[8, 1]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, traj_cmd_footstep[:, 0], 'r-', linewidth=1.5, alpha=0.7, label='Cmd X')
+                ax.plot(time_steps, traj_cmd_footstep[:, 1], 'g-', linewidth=1.5, alpha=0.7, label='Cmd Y')
+                ax.plot(time_steps, traj_cmd_stance[:, 0] * 0.1, 'k--', linewidth=2, label='Cmd Stance (×0.1)')
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Value')
+                ax.set_title('cmd_footstep (X, Y) & cmd_stance')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+                # Yaw angles - Base and Feet
+                ax = axes[9, 0]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                ax.plot(time_steps, base_yaw_traj, 'b-', linewidth=2.5, label='Base Yaw')
+                ax.plot(time_steps, lf_yaw_traj, 'r--', linewidth=1.5, alpha=0.7, label='Left Foot Yaw')
+                ax.plot(time_steps, rf_yaw_traj, 'g--', linewidth=1.5, alpha=0.7, label='Right Foot Yaw')
+                ax.plot(time_steps, avg_feet_yaw, 'k:', linewidth=2.5, label='Avg Feet Yaw')
+                # Mark phase boundaries
+                phase1_end = wait_frames_before + SUPPORT_KNOTS
+                phase2_end = wait_frames_before + SUPPORT_KNOTS + STEP_KNOTS + 1
+                phase3_end = len(traj_q) - wait_frames_after - 1
+                ax.axvline(x=phase1_end, color='gray', linestyle='--', alpha=0.3)
+                ax.axvline(x=phase2_end, color='gray', linestyle='--', alpha=0.3)
+                ax.axvline(x=phase3_end, color='purple', linestyle='--', linewidth=2, alpha=0.5, label='End 2nd DS')
+                # Mark end of 2nd double support
+                ax.plot(phase3_end, base_yaw_traj[phase3_end], 'bo', markersize=8)
+                ax.plot(phase3_end, avg_feet_yaw[phase3_end], 'ko', markersize=8)
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Yaw (rad)')
+                ax.set_title('Yaw Angles: Base vs Feet (Verification)')
+                ax.legend(loc='best', fontsize=8)
+                ax.grid(True, alpha=0.3)
+
+                # Yaw tracking error
+                ax = axes[9, 1]
+                add_countdown_background(ax, time_steps, traj_cmd_countdown)
+                yaw_error = (base_yaw_traj - avg_feet_yaw) * 1000  # Convert to milliradians
+                ax.plot(time_steps, yaw_error, 'r-', linewidth=2, label='Base Yaw - Avg Feet Yaw')
+                ax.axhline(y=0, color='k', linestyle='-', linewidth=1, alpha=0.3)
+                ax.axvline(x=phase1_end, color='gray', linestyle='--', alpha=0.3)
+                ax.axvline(x=phase2_end, color='gray', linestyle='--', alpha=0.3)
+                ax.axvline(x=phase3_end, color='purple', linestyle='--', linewidth=2, alpha=0.5, label='End 2nd DS')
+                # Mark end of 2nd double support with annotation
+                ax.plot(phase3_end, yaw_error[phase3_end], 'ro', markersize=8)
+                ax.annotate(f'{yaw_error[phase3_end]:.2f} mrad',
+                           xy=(phase3_end, yaw_error[phase3_end]),
+                           xytext=(phase3_end-5, yaw_error[phase3_end] + 2),
+                           fontsize=9, fontweight='bold',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7),
+                           arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+                ax.set_xlabel('Time Step')
+                ax.set_ylabel('Error (milliradians)')
+                ax.set_title('Yaw Tracking Error at End of 2nd Double Support')
+                ax.legend(loc='best', fontsize=8)
                 ax.grid(True, alpha=0.3)
 
                 plt.tight_layout()

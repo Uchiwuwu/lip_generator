@@ -149,13 +149,18 @@ class SimpleBipedGaitProblem:
             )
             loco3dModel += lStep
 
+            # Calculate average yaw from both feet for base orientation
+            # Left foot moved with targetYaw, right foot stayed at 0
+            avg_yaw = targetYaw / 2.0
+
             # Add transition double support - move COM to center between both feet
             doubleSupport_transition = [
                 self.createSwingFootModel(
                     timeStep,
                     [self.rfId, self.lfId],
                     comTask=com_final,
-                    comWeight=5e7
+                    comWeight=5e7,
+                    baseYawTask=avg_yaw if k == transitionKnots - 1 else None
                 )
                 for k in range(transitionKnots)
             ]
@@ -191,13 +196,18 @@ class SimpleBipedGaitProblem:
             )
             loco3dModel += rStep
 
+            # Calculate average yaw from both feet for base orientation
+            # Right foot moved with targetYaw, left foot stayed at 0
+            avg_yaw = targetYaw / 2.0
+
             # Add transition double support - move COM to center between both feet
             doubleSupport_transition = [
                 self.createSwingFootModel(
                     timeStep,
                     [self.rfId, self.lfId],
                     comTask=com_final,
-                    comWeight=5e7
+                    comWeight=5e7,
+                    baseYawTask=avg_yaw if k == transitionKnots - 1 else None
                 )
                 for k in range(transitionKnots)
             ]
@@ -485,7 +495,7 @@ class SimpleBipedGaitProblem:
 
     def createSwingFootModel(
         self, timeStep, supportFootIds, comTask=None, swingFootTask=None, comWeight=1e5, footWeight=1e6,
-        progressRatio=None, landingDampingStart=0.7, landingDampingWeight=1e5
+        progressRatio=None, landingDampingStart=0.7, landingDampingWeight=1e5, baseYawTask=None
     ):
         """Action model for a swing foot phase.
 
@@ -526,6 +536,42 @@ class SimpleBipedGaitProblem:
                 self.state, comTask, nu)
             comTrack = crocoddyl.CostModelResidual(self.state, comResidual)
             costModel.addCost("comTrack", comTrack, comWeight)
+
+        # Add base yaw orientation task if specified
+        if baseYawTask is not None:
+            # Create a modified default state with the target yaw orientation
+            # Convert yaw to quaternion: q = [w, x, y, z] where for yaw: w=cos(yaw/2), z=sin(yaw/2), x=y=0
+            target_quat = pinocchio.Quaternion(
+                np.cos(baseYawTask / 2),  # w
+                0.0,  # x
+                0.0,  # y
+                np.sin(baseYawTask / 2)  # z
+            )
+            target_quat.normalize()
+
+            # Create modified state target
+            state_target = self.rmodel.defaultState.copy()
+            # Set base orientation (indices 3-6 in configuration)
+            state_target[3] = target_quat.x  # qx
+            state_target[4] = target_quat.y  # qy
+            state_target[5] = target_quat.z  # qz
+            state_target[6] = target_quat.w  # qw
+
+            # Create state residual with custom activation for base orientation only
+            baseOrientationResidual = crocoddyl.ResidualModelState(
+                self.state, state_target, nu
+            )
+            # Weight only the base orientation (indices 3-5 in velocity space)
+            orientation_weights = np.zeros(self.state.ndx)
+            orientation_weights[3:6] = 1.0  # Base orientation components
+            baseOrientationActivation = crocoddyl.ActivationModelWeightedQuad(
+                orientation_weights**2
+            )
+            baseOrientationCost = crocoddyl.CostModelResidual(
+                self.state, baseOrientationActivation, baseOrientationResidual
+            )
+            costModel.addCost("baseYawTrack", baseOrientationCost, 1e7)
+
         for i in supportFootIds:
             cone = crocoddyl.WrenchCone(
                 self.Rsurf, self.mu, np.array([0.1, 0.05]))
@@ -645,7 +691,7 @@ class SimpleBipedGaitProblem:
         for leg in range(2):  # Left and right legs
             leg_joint_weights += [
                 0.01,    # Hip_Pitch
-                50.0,    # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.5,    # Hip_Roll - HIGHER weight to prevent excessive deviation
                 0.01,    # Hip_Yaw
                 0.001,   # Knee_Pitch - LOWER weight to allow more bending
                 0.01,    # Ankle_Pitch
@@ -658,7 +704,7 @@ class SimpleBipedGaitProblem:
             [100.0] * num_upper_body +         # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
             [100, 100, 1e3] +                        # base linear velocity
-            [5e3] * 3 +                        # base angular velocity - VERY HIGH
+            [5e2] * 3 +                        # base angular velocity - VERY HIGH
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
@@ -814,7 +860,7 @@ class SimpleBipedGaitProblem:
         for leg in range(2):  # Left and right legs
             leg_joint_weights += [
                 0.01,    # Hip_Pitch
-                50.0,    # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.5,    # Hip_Roll - HIGHER weight to prevent excessive deviation
                 0.01,    # Hip_Yaw
                 0.001,   # Knee_Pitch - LOWER weight to allow more bending
                 0.01,    # Ankle_Pitch
@@ -827,7 +873,7 @@ class SimpleBipedGaitProblem:
             [5e3] * num_upper_body +           # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
             [100, 100, 1e3] +                        # base linear velocity
-            [5e3] * 3 +                        # base angular velocity
+            [5e2] * 3 +                        # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
@@ -917,7 +963,7 @@ class SimpleBipedGaitProblem:
         for leg in range(2):  # Left and right legs
             leg_joint_weights += [
                 0.1,     # Hip_Pitch
-                50.0,    # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.5,    # Hip_Roll - HIGHER weight to prevent excessive deviation
                 0.1,     # Hip_Yaw
                 0.01,    # Knee_Pitch - LOWER weight to allow more bending
                 0.1,     # Ankle_Pitch
@@ -930,7 +976,7 @@ class SimpleBipedGaitProblem:
             [5e3] * num_upper_body +           # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
             [100, 100, 1e3] +                        # base linear velocity
-            [5e3] * 3 +                        # base angular velocity
+            [5e2] * 3 +                        # base angular velocity
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
