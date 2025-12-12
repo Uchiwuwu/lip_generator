@@ -43,7 +43,7 @@ STEP_KNOTS = 20
 SUPPORT_KNOTS = 20  # Increased from 10 for smoother and more accurate COM transitions
 TRANSITION_KNOTS = 10  # Knots for post-swing COM centering phase
 COM_SHIFT_RATIO = 0.7  # Ratio of COM shift towards center during swing (0.8 = 80%)
-INITIAL_COM_SHIFT = 0.5  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
+INITIAL_COM_SHIFT = 0.65  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
 WITHDISPLAY = True
 PLOT = 1
 CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
@@ -63,7 +63,7 @@ YAW_STEP_UNIT = 0.2
 
 # Solver parameters
 MAX_ITERATIONS = 600  # Increased for better convergence with higher accuracy requirements
-SOLVER_THRESHOLD = 1e-5  # Tightened threshold for more precise solutions
+SOLVER_THRESHOLD = 5e-4  # Tightened threshold for more precise solutions
 
 
 def get_memory_usage():
