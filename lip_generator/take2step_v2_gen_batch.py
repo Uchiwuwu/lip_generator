@@ -41,15 +41,15 @@ OUTPUT_FILE = os.path.join(SCRIPT_DIR, "stepping_dataset.npz")
 TIME_STEP = 0.02
 STEP_KNOTS = 20
 SUPPORT_KNOTS = 20  # Increased from 10 for smoother and more accurate COM transitions
-TRANSITION_KNOTS = 10  # Knots for post-swing COM centering phase
-COM_SHIFT_RATIO = 0.7  # Ratio of COM shift towards center during swing (0.8 = 80%)
+TRANSITION_KNOTS = 20  # Knots for post-swing COM centering phase
+COM_SHIFT_RATIO = 0.65  # Ratio of COM shift towards center during swing (0.8 = 80%)
 INITIAL_COM_SHIFT = 0.65  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
 WITHDISPLAY = True
 PLOT = 1
 CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
 
 # Step generation parameters
-STEP_HEIGHT = 0.15  # Step height in meters
+STEP_HEIGHT = 0.125  # Step height in meters
 WAIT_TIME_RANGE = (0.8, 1.0)  # Waiting period before step (seconds)
 MID_WAIT_TIME_RANGE = (0.3, 0.6)  # Waiting period between two steps (seconds)
 # Grid sampling parameters
