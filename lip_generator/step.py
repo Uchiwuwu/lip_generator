@@ -131,7 +131,7 @@ class SimpleBipedGaitProblem:
         com_initial_shifted_3d = np.array([com_initial_shifted[0], com_initial_shifted[1], com_current_height])
 
         # Initial double support phase - shift COM toward stance foot to prepare for swing
-        # Use higher baseYawWeight to minimize rotation during this phase
+        # Use VERY high baseYawWeight to lock rotation during this phase
         doubleSupport_initial = [
             self.createSwingFootModel(
                 timeStep,
@@ -139,7 +139,7 @@ class SimpleBipedGaitProblem:
                 comTask=com_initial_shifted_3d,
                 comWeight=5e8,
                 baseYawTask=baseYaw0,
-                baseYawWeight=1e8  # Higher weight to minimize yaw rotation
+                baseYawWeight=1e10  # Moderate weight (hip yaw constraints do most of the work)
             )
             for k in range(supportKnots)
         ]
@@ -174,7 +174,7 @@ class SimpleBipedGaitProblem:
 
             # Add transition double support - move COM to center between both feet
             # Rotate base yaw to average of both feet throughout the entire phase
-            # Use higher weight to ensure base reaches target yaw
+            # Use VERY high weight to accurately reach target yaw
             doubleSupport_transition = [
                 self.createSwingFootModel(
                     timeStep,
@@ -182,7 +182,7 @@ class SimpleBipedGaitProblem:
                     comTask=com_final,
                     comWeight=5e8,
                     baseYawTask=avg_yaw,  # Apply throughout entire transition
-                    baseYawWeight=1e8  # Higher weight to ensure convergence to avg_yaw
+                    baseYawWeight=1e10  # Moderate weight (hip yaw constraints do most of the work)
                 )
                 for k in range(transitionKnots)
             ]
@@ -226,7 +226,7 @@ class SimpleBipedGaitProblem:
 
             # Add transition double support - move COM to center between both feet
             # Rotate base yaw to average of both feet throughout the entire phase
-            # Use higher weight to ensure base reaches target yaw
+            # Use VERY high weight to accurately reach target yaw
             doubleSupport_transition = [
                 self.createSwingFootModel(
                     timeStep,
@@ -234,7 +234,7 @@ class SimpleBipedGaitProblem:
                     comTask=com_final,
                     comWeight=5e8,
                     baseYawTask=avg_yaw,  # Apply throughout entire transition
-                    baseYawWeight=1e8  # Higher weight to ensure convergence to avg_yaw
+                    baseYawWeight=1e10  # Moderate weight (hip yaw constraints do most of the work)
                 )
                 for k in range(transitionKnots)
             ]
@@ -433,6 +433,7 @@ class SimpleBipedGaitProblem:
                     swingFootTask=swingFootTask,
                     footWeight=1e9,  # Very high weight to enforce straight line trajectory in x,y
                     baseYawTask=baseYawDuringSwing,  # Keep base yaw fixed during swing
+                    baseYawWeight=1e10,  # Moderate weight (hip yaw constraints do most of the work)
                     # progressRatio=progress,  # Pass current progress for landing damping
                     # landingDampingStart=0.5,  # Start damping at 70% of swing
                     # landingDampingWeight=5e3  # Base weight for velocity penalty
@@ -724,7 +725,7 @@ class SimpleBipedGaitProblem:
         state_target = self.rmodel.defaultState.copy()
         # Add base yaw orientation task if specified
         if baseYawTask is not None:
-            # Create a modified default state with the target yaw orientation
+            # Create a pure yaw rotation (pitch=0, roll=0)
             # Convert yaw to quaternion: q = [w, x, y, z] where for yaw: w=cos(yaw/2), z=sin(yaw/2), x=y=0
             target_quat = pinocchio.Quaternion(
                 np.cos(baseYawTask / 2),  # w
@@ -872,34 +873,45 @@ class SimpleBipedGaitProblem:
         # Create leg joint weights with higher penalty for hip roll joints
         # Leg structure: [Hip_Pitch, Hip_Roll, Hip_Yaw, Knee_Pitch, Ankle_Pitch, Ankle_Roll] x 2 legs
         leg_joint_weights = []
+        leg_joint_velocity_weights = []
         for leg in range(2):  # Left and right legs
             leg_joint_weights += [
                 0.01,    # Hip_Pitch
-                0.5,    # Hip_Roll - HIGHER weight to prevent excessive deviation
-                0.01,    # Hip_Yaw
+                0.5,     # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.1,     # Hip_Yaw - HIGH weight to prevent base rotation
                 0.001,   # Knee_Pitch - LOWER weight to allow more bending
                 0.01,    # Ankle_Pitch
                 0.01,    # Ankle_Roll
+            ]
+            leg_joint_velocity_weights += [
+                10,      # Hip_Pitch velocity
+                10,      # Hip_Roll velocity
+                1,     # Hip_Yaw velocity - VERY HIGH to prevent yaw rotation
+                10,      # Knee_Pitch velocity
+                10,      # Ankle_Pitch velocity
+                10,      # Ankle_Roll velocity
             ]
         if baseYawTask is not None:
             stateWeights = np.array(
                 [0, 0, 0] +                          # base position (free)
                 [5e3] * 3 +                          # base orientation (same as default)
-                [100.0] * num_upper_body +         # upper body joints - HIGHER weight
-                leg_joint_weights +                # leg joints with higher hip roll weight
-                [100, 100, 1e3] +                        # base linear velocity
-                [5e3] * 3 +                        # base angular velocity
-                [10] * (self.state.nv - 6)         # joint velocities
+                [100.0] * num_upper_body +           # upper body joints - HIGHER weight
+                leg_joint_weights +                  # leg joints with higher hip roll weight
+                [100, 100, 1e3] +                    # base linear velocity
+                [5e3] * 3 +                          # base angular velocity
+                [10] * num_upper_body +              # upper body joint velocities
+                leg_joint_velocity_weights           # leg joint velocities
             )
         else:
             stateWeights = np.array(
                 [0, 0, 0] +                          # base position (free)
-                [5e3] * 3 +                      # base orientation
-                [100.0] * num_upper_body +         # upper body joints - HIGHER weight
-                leg_joint_weights +                # leg joints with higher hip roll weight
-                [100, 100, 1e3] +                        # base linear velocity
-                [5e3] * 3 +                        # base angular velocity - VERY HIGH
-                [10] * (self.state.nv - 6)         # joint velocities
+                [5e3, 5e3, 100]  +                          # base orientation
+                [100.0] * num_upper_body +           # upper body joints - HIGHER weight
+                leg_joint_weights +                  # leg joints with higher hip roll weight
+                [100, 100, 500] +                    # base linear velocity
+                [5e3] * 3 +                          # base angular velocity - VERY HIGH
+                [10] * num_upper_body +              # upper body joint velocities
+                leg_joint_velocity_weights           # leg joint velocities
             )
         stateResidual = crocoddyl.ResidualModelState(
             self.state, state_target, nu
@@ -1053,14 +1065,23 @@ class SimpleBipedGaitProblem:
 
         # Create leg joint weights with higher penalty for hip roll joints
         leg_joint_weights = []
+        leg_joint_velocity_weights = []
         for leg in range(2):  # Left and right legs
             leg_joint_weights += [
                 0.01,    # Hip_Pitch
-                0.5,    # Hip_Roll - HIGHER weight to prevent excessive deviation
-                0.01,    # Hip_Yaw
+                0.5,     # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.1,     # Hip_Yaw - HIGH weight to prevent base rotation
                 0.001,   # Knee_Pitch - LOWER weight to allow more bending
                 0.01,    # Ankle_Pitch
                 0.01,    # Ankle_Roll
+            ]
+            leg_joint_velocity_weights += [
+                10,      # Hip_Pitch velocity
+                10,      # Hip_Roll velocity
+                1,     # Hip_Yaw velocity - VERY HIGH to prevent yaw rotation
+                10,      # Knee_Pitch velocity
+                10,      # Ankle_Pitch velocity
+                10,      # Ankle_Roll velocity
             ]
 
         # Create state target with custom base yaw if specified
@@ -1081,12 +1102,13 @@ class SimpleBipedGaitProblem:
 
         stateWeights = np.array(
             [0, 0, 0] +                        # base position
-            [5e3] * 3 +                        # base orientation
+            [5e3, 5e3, 100] +                        # base orientation
             [5e3] * num_upper_body +           # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
-            [100, 100, 1e3] +                        # base linear velocity
+            [100, 100, 500] +                  # base linear velocity
             [5e3] * 3 +                        # base angular velocity
-            [10] * (self.state.nv - 6)         # joint velocities
+            [10] * num_upper_body +            # upper body joint velocities
+            leg_joint_velocity_weights         # leg joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
             self.state, state_target, nu
@@ -1173,14 +1195,23 @@ class SimpleBipedGaitProblem:
 
         # Create leg joint weights with higher penalty for hip roll joints
         leg_joint_weights = []
+        leg_joint_velocity_weights = []
         for leg in range(2):  # Left and right legs
             leg_joint_weights += [
                 0.1,     # Hip_Pitch
-                0.5,    # Hip_Roll - HIGHER weight to prevent excessive deviation
-                0.1,     # Hip_Yaw
+                0.5,     # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.01,    # Hip_Yaw
                 0.01,    # Knee_Pitch - LOWER weight to allow more bending
                 0.1,     # Ankle_Pitch
                 0.1,     # Ankle_Roll
+            ]
+            leg_joint_velocity_weights += [
+                10,      # Hip_Pitch velocity
+                10,      # Hip_Roll velocity
+                1,      # Hip_Yaw velocity
+                10,      # Knee_Pitch velocity
+                10,      # Ankle_Pitch velocity
+                10,      # Ankle_Roll velocity
             ]
 
         # Create state target with custom base yaw if specified
@@ -1200,13 +1231,14 @@ class SimpleBipedGaitProblem:
             state_target[6] = target_quat.w  # qw
 
         stateWeights = np.array(
-            [0, 0, 0]+                        # base position
-            [5e3] * 3 +                        # base orientation
+            [0, 0, 0]+                         # base position
+            [5e3, 5e3, 100] +                        # base orientation
             [5e3] * num_upper_body +           # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
-            [100, 100, 1e3] +                        # base linear velocity
+            [100, 100, 500] +                  # base linear velocity
             [5e3] * 3 +                        # base angular velocity
-            [10] * (self.state.nv - 6)         # joint velocities
+            [10] * num_upper_body +            # upper body joint velocities
+            leg_joint_velocity_weights         # leg joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
             self.state, state_target, 0

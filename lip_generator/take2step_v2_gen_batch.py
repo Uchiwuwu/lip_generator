@@ -44,8 +44,8 @@ SUPPORT_KNOTS = 20  # Increased from 10 for smoother and more accurate COM trans
 TRANSITION_KNOTS = 20  # Knots for post-swing COM centering phase
 COM_SHIFT_RATIO = 0.65  # Ratio of COM shift towards center during swing (0.8 = 80%)
 INITIAL_COM_SHIFT = 0.65  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
-WITHDISPLAY = True
-PLOT = 1
+WITHDISPLAY = False
+PLOT = 0
 CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
 
 # Step generation parameters
@@ -90,7 +90,7 @@ def load_robot():
         [
             0,
             0,
-            0.645,  # base position (lowered from 0.665)
+            0.655,  # base position (updated for COM height ~0.57m)
             0,
             0,
             0,
@@ -112,17 +112,17 @@ def load_robot():
             0.0,
             0.0,  # right arm
             0,  # head
-            -0.4,  # left hip pitch (changed from -0.2)
+            -0.3,  # left hip pitch
             0.007658,
             0,
-            0.6,  # left knee (changed from 0.4)
-            -0.2,  # left ankle pitch (changed from -0.25)
+            0.6,  # left knee
+            -0.3,  # left ankle pitch
             0,  # left leg
-            -0.4,  # right hip pitch (changed from -0.2)
+            -0.3,  # right hip pitch
             -0.007658,
             0,
-            0.6,  # right knee (changed from 0.4)
-            -0.2,  # right ankle pitch (changed from -0.25)
+            0.6,  # right knee
+            -0.3,  # right ankle pitch
             0,  # right leg
         ]
     )
