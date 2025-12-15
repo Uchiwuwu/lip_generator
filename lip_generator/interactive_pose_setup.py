@@ -18,8 +18,8 @@ import os
 def load_robot():
     """Load the robot model with meshcat visualization."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    urdf_path = os.path.join(script_dir, "lip_generator/model", "T1_7dof_arms_with_gripper.urdf")
-    package_dir = os.path.join(script_dir, "lip_generator/model")
+    urdf_path = os.path.join(script_dir, "model", "T1_7dof_arms_with_gripper.urdf")
+    package_dir = os.path.join(script_dir, "model")
 
     robot = pinocchio.RobotWrapper.BuildFromURDF(
         urdf_path,
