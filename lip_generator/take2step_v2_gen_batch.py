@@ -43,7 +43,8 @@ STEP_KNOTS = 20
 SUPPORT_KNOTS = 20  # Increased from 10 for smoother and more accurate COM transitions
 TRANSITION_KNOTS = 20  # Knots for post-swing COM centering phase
 COM_SHIFT_RATIO = 0.65  # Ratio of COM shift towards center during swing (0.8 = 80%)
-INITIAL_COM_SHIFT = 0.65  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
+INITIAL_COM_SHIFT = 0.6  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
+TRANSITION_COM_SHIFT_RATIO = 0.9  # Ratio of COM shift towards center in Y axis during transition. 1.0=center, 0.6=40% offset toward stance foot, 0.0=at stance foot
 WITHDISPLAY = True
 PLOT = 1
 CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
@@ -258,7 +259,7 @@ def solve_stepping_problem(gait, x0, left_target, right_target, target_yaw=0.0, 
         if np.any(np.isnan(left_target)) or np.any(np.isnan(right_target)):
             return None, False
 
-        problem = gait.createSingleStepProblem(x0, left_target, right_target, TIME_STEP, STEP_KNOTS, SUPPORT_KNOTS, STEP_HEIGHT, target_yaw, TRANSITION_KNOTS, COM_SHIFT_RATIO, INITIAL_COM_SHIFT)
+        problem = gait.createSingleStepProblem(x0, left_target, right_target, TIME_STEP, STEP_KNOTS, SUPPORT_KNOTS, STEP_HEIGHT, target_yaw, TRANSITION_KNOTS, COM_SHIFT_RATIO, INITIAL_COM_SHIFT, TRANSITION_COM_SHIFT_RATIO)
 
         solver = crocoddyl.SolverIntro(problem)
         solver.th_stop = SOLVER_THRESHOLD
@@ -727,6 +728,7 @@ def main():
     print(f"TRANSITION_KNOTS: {TRANSITION_KNOTS}")
     print(f"COM_SHIFT_RATIO: {COM_SHIFT_RATIO}")
     print(f"INITIAL_COM_SHIFT: {INITIAL_COM_SHIFT}")
+    print(f"TRANSITION_COM_SHIFT_RATIO: {TRANSITION_COM_SHIFT_RATIO}")
     print(f"WITHDISPLAY: {WITHDISPLAY}")
     print(f"CHECKPOINT_FREQUENCY: {CHECKPOINT_FREQUENCY}")
     print(f"STEP_HEIGHT: {STEP_HEIGHT}")
