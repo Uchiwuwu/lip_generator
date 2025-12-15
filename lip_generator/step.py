@@ -82,12 +82,24 @@ class SimpleBipedGaitProblem:
         # Default transitionKnots to supportKnots if not specified
         if transitionKnots is None:
             transitionKnots = supportKnots
-        # Compute the current foot positions
+        # Compute the current foot positions and orientations
         q0 = x0[: self.state.nq]
         pinocchio.forwardKinematics(self.rmodel, self.rdata, q0)
         pinocchio.updateFramePlacements(self.rmodel, self.rdata)
         rfPos0 = self.rdata.oMf[self.rfId].translation
         lfPos0 = self.rdata.oMf[self.lfId].translation
+        # Get initial yaw angles of both feet in world frame
+        rfRot0 = self.rdata.oMf[self.rfId].rotation
+        lfRot0 = self.rdata.oMf[self.lfId].rotation
+        # Extract yaw from rotation matrix (yaw = atan2(R[1,0], R[0,0]))
+        rfYaw0 = np.arctan2(rfRot0[1, 0], rfRot0[0, 0])
+        lfYaw0 = np.arctan2(lfRot0[1, 0], lfRot0[0, 0])
+
+        # Get initial base yaw from base orientation
+        # Base orientation is stored as quaternion [x, y, z, w] in q0[3:7]
+        base_quat = pinocchio.Quaternion(q0[6], q0[3], q0[4], q0[5])  # [w, x, y, z]
+        base_rot = base_quat.toRotationMatrix()
+        baseYaw0 = np.arctan2(base_rot[1, 0], base_rot[0, 0])
 
         # Compute CoM reference between current foot positions
         comRef = (rfPos0 + lfPos0) / 2
@@ -112,17 +124,22 @@ class SimpleBipedGaitProblem:
             stance_foot_pos = lfPos0
 
         # Calculate COM shifted toward stance foot
+        # Use actual current COM height (not lowered comRef) to prevent dropping
+        com_current_height = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
         com_displacement_initial = stance_foot_pos[:2] - comRef[:2]
         com_initial_shifted = comRef[:2] + com_displacement_initial * initialComShift
-        com_initial_shifted_3d = np.array([com_initial_shifted[0], com_initial_shifted[1], comRef[2]])
+        com_initial_shifted_3d = np.array([com_initial_shifted[0], com_initial_shifted[1], com_current_height])
 
         # Initial double support phase - shift COM toward stance foot to prepare for swing
+        # Use higher baseYawWeight to minimize rotation during this phase
         doubleSupport_initial = [
             self.createSwingFootModel(
                 timeStep,
                 [self.rfId, self.lfId],
                 comTask=com_initial_shifted_3d,
-                comWeight=5e8  # Higher weight for stability
+                comWeight=5e8,
+                baseYawTask=baseYaw0,
+                baseYawWeight=1e8  # Higher weight to minimize yaw rotation
             )
             for k in range(supportKnots)
         ]
@@ -134,7 +151,12 @@ class SimpleBipedGaitProblem:
 
         # Determine which foot to move first (the one with larger movement)
         if leftFootMovement > rightFootMovement:
-            # Move left foot first
+            # Move left foot first (right foot is stance)
+            # Calculate average yaw from both feet in world frame for base orientation
+            # Left foot moved with targetYaw, right foot stayed at its initial yaw
+            avg_yaw = (targetYaw + rfYaw0) / 2.0
+
+            # During swing, rotate base yaw towards avg_yaw (average of both feet)
             lStep = self.createFootstepModelsWithTarget(
                 comRef,
                 lfPos0,
@@ -146,16 +168,21 @@ class SimpleBipedGaitProblem:
                 [self.lfId],  # left foot swings
                 targetYaw,
                 comShiftRatio,
+                baseYawDuringSwing=avg_yaw,  # Rotate towards average yaw during swing
             )
             loco3dModel += lStep
 
             # Add transition double support - move COM to center between both feet
+            # Rotate base yaw to average of both feet throughout the entire phase
+            # Use higher weight to ensure base reaches target yaw
             doubleSupport_transition = [
                 self.createSwingFootModel(
                     timeStep,
                     [self.rfId, self.lfId],
                     comTask=com_final,
-                    comWeight=5e8
+                    comWeight=5e8,
+                    baseYawTask=avg_yaw,  # Apply throughout entire transition
+                    baseYawWeight=1e8  # Higher weight to ensure convergence to avg_yaw
                 )
                 for k in range(transitionKnots)
             ]
@@ -176,7 +203,12 @@ class SimpleBipedGaitProblem:
             #     )
             #     loco3dModel += rStep
         else:
-            # Move right foot first
+            # Move right foot first (left foot is stance)
+            # Calculate average yaw from both feet in world frame for base orientation
+            # Right foot moved with targetYaw, left foot stayed at its initial yaw
+            avg_yaw = (targetYaw + lfYaw0) / 2.0
+
+            # During swing, rotate base yaw towards avg_yaw (average of both feet)
             rStep = self.createFootstepModelsWithTarget(
                 comRef,
                 rfPos0,
@@ -188,16 +220,21 @@ class SimpleBipedGaitProblem:
                 [self.rfId],  # right foot swings
                 targetYaw,
                 comShiftRatio,
+                baseYawDuringSwing=avg_yaw,  # Rotate towards average yaw during swing
             )
             loco3dModel += rStep
 
             # Add transition double support - move COM to center between both feet
+            # Rotate base yaw to average of both feet throughout the entire phase
+            # Use higher weight to ensure base reaches target yaw
             doubleSupport_transition = [
                 self.createSwingFootModel(
                     timeStep,
                     [self.rfId, self.lfId],
                     comTask=com_final,
-                    comWeight=5e8
+                    comWeight=5e8,
+                    baseYawTask=avg_yaw,  # Apply throughout entire transition
+                    baseYawWeight=1e8  # Higher weight to ensure convergence to avg_yaw
                 )
                 for k in range(transitionKnots)
             ]
@@ -298,6 +335,7 @@ class SimpleBipedGaitProblem:
         swingFootIds,
         targetYaw=0.0,
         comShiftRatio=0.8,
+        baseYawDuringSwing=None,
     ):
         """Action models for a footstep phase with explicit target position.
 
@@ -311,6 +349,7 @@ class SimpleBipedGaitProblem:
         :param swingFootIds: Ids of the swinging foot
         :param targetYaw: target yaw angle for the swinging foot (default: 0.0 rad)
         :param comShiftRatio: ratio of COM shift towards center during swing (default: 0.8 = 80%)
+        :param baseYawDuringSwing: yaw angle to maintain for the base during swing (default: None)
         :return footstep action models
         """
         # Convert to numpy arrays
@@ -393,6 +432,7 @@ class SimpleBipedGaitProblem:
                     comTask=comTask,
                     swingFootTask=swingFootTask,
                     footWeight=1e9,  # Very high weight to enforce straight line trajectory in x,y
+                    baseYawTask=baseYawDuringSwing,  # Keep base yaw fixed during swing
                     # progressRatio=progress,  # Pass current progress for landing damping
                     # landingDampingStart=0.5,  # Start damping at 70% of swing
                     # landingDampingWeight=5e3  # Base weight for velocity penalty
@@ -401,7 +441,7 @@ class SimpleBipedGaitProblem:
 
         # Action model for the foot switch (landing)
         footSwitchModel = self.createFootSwitchModel(
-            swingFootIds, swingFootTask
+            swingFootIds, swingFootTask, baseYawTask=baseYawDuringSwing
         )
 
         return [*footSwingModel, footSwitchModel]
@@ -483,9 +523,163 @@ class SimpleBipedGaitProblem:
             p += [stepLength, 0.0, 0.0]
         return [*footSwingModel, footSwitchModel]
 
+    # def createInitialSupportModel(self, timeStep, supportFootIds, comTask, baseYaw):
+    #     """Action model for initial double support phase with locked base orientation.
+
+    #     This phase prepares for the swing by shifting COM while keeping the base
+    #     completely fixed in orientation.
+
+    #     :param timeStep: step duration
+    #     :param supportFootIds: Ids of both feet (double support)
+    #     :param comTask: target CoM position
+    #     :param baseYaw: target yaw to lock (should be initial base yaw)
+    #     :return action model with locked base orientation
+    #     """
+    #     if self._fwddyn:
+    #         nu = self.actuation.nu
+    #     else:
+    #         nu = self.state.nv + 6 * len(supportFootIds)
+
+    #     contactModel = crocoddyl.ContactModelMultiple(self.state, nu)
+    #     for i in supportFootIds:
+    #         supportContactModel = crocoddyl.ContactModel6D(
+    #             self.state,
+    #             i,
+    #             pinocchio.SE3.Identity(),
+    #             pinocchio.LOCAL_WORLD_ALIGNED,
+    #             nu,
+    #             np.array([0.0, 30.0]),
+    #         )
+    #         contactModel.addContact(
+    #             self.rmodel.frames[i].name + "_contact", supportContactModel
+    #         )
+
+    #     # Creating the cost model
+    #     costModel = crocoddyl.CostModelSum(self.state, nu)
+
+    #     # CoM tracking
+    #     comResidual = crocoddyl.ResidualModelCoMPosition(self.state, comTask, nu)
+    #     comTrack = crocoddyl.CostModelResidual(self.state, comResidual)
+    #     costModel.addCost("comTrack", comTrack, 5e8)
+
+    #     # Create state target with locked base yaw
+    #     state_target = self.rmodel.defaultState.copy()
+    #     target_quat = pinocchio.Quaternion(
+    #         np.cos(baseYaw / 2), 0.0, 0.0, np.sin(baseYaw / 2)
+    #     )
+    #     target_quat.normalize()
+    #     state_target[3] = target_quat.x
+    #     state_target[4] = target_quat.y
+    #     state_target[5] = target_quat.z
+    #     state_target[6] = target_quat.w
+
+    #     # EXTREMELY high weight on base orientation to lock it completely
+    #     baseOrientationResidual = crocoddyl.ResidualModelState(self.state, state_target, nu)
+    #     orientation_weights = np.zeros(self.state.ndx)
+    #     orientation_weights[3:6] = 1.0  # Base orientation only
+    #     baseOrientationActivation = crocoddyl.ActivationModelWeightedQuad(orientation_weights**2)
+    #     baseOrientationCost = crocoddyl.CostModelResidual(
+    #         self.state, baseOrientationActivation, baseOrientationResidual
+    #     )
+    #     costModel.addCost("baseOrientationLock", baseOrientationCost, 1e12)  # Extremely high
+
+    #     # EXTREMELY high weight on base angular velocity to prevent any rotation
+    #     try:
+    #         baseAngularVelResidual = crocoddyl.ResidualModelFrameVelocity(
+    #             self.state,
+    #             self.rmodel.getFrameId("base_link"),
+    #             pinocchio.Motion.Zero(),
+    #             pinocchio.LOCAL_WORLD_ALIGNED,
+    #             nu
+    #         )
+    #         angularVelWeights = np.array([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+    #         angularVelActivation = crocoddyl.ActivationModelWeightedQuad(angularVelWeights**2)
+    #         baseAngularVelCost = crocoddyl.CostModelResidual(
+    #             self.state, angularVelActivation, baseAngularVelResidual
+    #         )
+    #         costModel.addCost("baseAngularVelLock", baseAngularVelCost, 1e12)  # Extremely high
+    #     except:
+    #         pass
+
+    #     # Wrench cone constraints
+    #     for i in supportFootIds:
+    #         cone = crocoddyl.WrenchCone(self.Rsurf, self.mu, np.array([0.1, 0.05]))
+    #         wrenchResidual = crocoddyl.ResidualModelContactWrenchCone(
+    #             self.state, i, cone, nu, self._fwddyn
+    #         )
+    #         wrenchActivation = crocoddyl.ActivationModelQuadraticBarrier(
+    #             crocoddyl.ActivationBounds(cone.lb, cone.ub)
+    #         )
+    #         wrenchCone = crocoddyl.CostModelResidual(
+    #             self.state, wrenchActivation, wrenchResidual
+    #         )
+    #         costModel.addCost(
+    #             self.rmodel.frames[i].name + "_wrenchCone", wrenchCone, 1e1
+    #         )
+
+    #     # State and control regularization with zero weight on base orientation
+    #     num_upper_body = 17
+    #     leg_joint_weights = []
+    #     for leg in range(2):
+    #         leg_joint_weights += [0.01, 0.5, 0.01, 0.001, 0.01, 0.01]
+
+    #     stateWeights = np.array(
+    #         [0, 0, 0] +                          # base position (free)
+    #         [0, 0, 0] +                          # base orientation (controlled by baseOrientationLock)
+    #         [100.0] * num_upper_body +
+    #         leg_joint_weights +
+    #         [100, 100, 1e3] +                    # base linear velocity
+    #         [0, 0, 0] +                          # base angular velocity (controlled by baseAngularVelLock)
+    #         [10] * (self.state.nv - 6)
+    #     )
+    #     stateResidual = crocoddyl.ResidualModelState(self.state, state_target, nu)
+    #     stateActivation = crocoddyl.ActivationModelWeightedQuad(stateWeights**2)
+    #     stateReg = crocoddyl.CostModelResidual(self.state, stateActivation, stateResidual)
+
+    #     if self._fwddyn:
+    #         ctrlResidual = crocoddyl.ResidualModelControl(self.state, nu)
+    #     else:
+    #         ctrlResidual = crocoddyl.ResidualModelJointEffort(self.state, self.actuation, nu)
+    #     ctrlReg = crocoddyl.CostModelResidual(self.state, ctrlResidual)
+
+    #     costModel.addCost("stateReg", stateReg, 1e2)
+    #     costModel.addCost("ctrlReg", ctrlReg, 1e3)
+
+    #     # Create integrated action model
+    #     if self._fwddyn:
+    #         dmodel = crocoddyl.DifferentialActionModelContactFwdDynamics(
+    #             self.state, self.actuation, contactModel, costModel, 0.0, True
+    #         )
+    #     else:
+    #         dmodel = crocoddyl.DifferentialActionModelContactInvDynamics(
+    #             self.state, self.actuation, contactModel, costModel
+    #         )
+
+    #     if self._control == "one":
+    #         control = crocoddyl.ControlParametrizationModelPolyOne(nu)
+    #     elif self._control == "rk4":
+    #         control = crocoddyl.ControlParametrizationModelPolyTwoRK(nu, crocoddyl.RKType.four)
+    #     elif self._control == "rk3":
+    #         control = crocoddyl.ControlParametrizationModelPolyTwoRK(nu, crocoddyl.RKType.three)
+    #     else:
+    #         control = crocoddyl.ControlParametrizationModelPolyZero(nu)
+
+    #     if self._integrator == "euler":
+    #         model = crocoddyl.IntegratedActionModelEuler(dmodel, control, timeStep)
+    #     elif self._integrator == "rk4":
+    #         model = crocoddyl.IntegratedActionModelRK(dmodel, control, crocoddyl.RKType.four, timeStep)
+    #     elif self._integrator == "rk3":
+    #         model = crocoddyl.IntegratedActionModelRK(dmodel, control, crocoddyl.RKType.three, timeStep)
+    #     elif self._integrator == "rk2":
+    #         model = crocoddyl.IntegratedActionModelRK(dmodel, control, crocoddyl.RKType.two, timeStep)
+    #     else:
+    #         model = crocoddyl.IntegratedActionModelEuler(dmodel, control, timeStep)
+
+    #     return model
+
     def createSwingFootModel(
         self, timeStep, supportFootIds, comTask=None, swingFootTask=None, comWeight=1e5, footWeight=1e6,
-        progressRatio=None, landingDampingStart=0.7, landingDampingWeight=1e5
+        progressRatio=None, landingDampingStart=0.7, landingDampingWeight=1e5, baseYawTask=None, baseYawWeight=1e6
     ):
         """Action model for a swing foot phase.
 
@@ -526,6 +720,42 @@ class SimpleBipedGaitProblem:
                 self.state, comTask, nu)
             comTrack = crocoddyl.CostModelResidual(self.state, comResidual)
             costModel.addCost("comTrack", comTrack, comWeight)
+
+        state_target = self.rmodel.defaultState.copy()
+        # Add base yaw orientation task if specified
+        if baseYawTask is not None:
+            # Create a modified default state with the target yaw orientation
+            # Convert yaw to quaternion: q = [w, x, y, z] where for yaw: w=cos(yaw/2), z=sin(yaw/2), x=y=0
+            target_quat = pinocchio.Quaternion(
+                np.cos(baseYawTask / 2),  # w
+                0.0,  # x
+                0.0,  # y
+                np.sin(baseYawTask / 2)  # z
+            )
+            target_quat.normalize()
+
+            # Create modified state target
+            # Set base orientation (indices 3-6 in configuration)
+            state_target[3] = target_quat.x  # qx
+            state_target[4] = target_quat.y  # qy
+            state_target[5] = target_quat.z  # qz
+            state_target[6] = target_quat.w  # qw
+
+            # Create state residual with custom activation for base orientation only
+            baseOrientationResidual = crocoddyl.ResidualModelState(
+                self.state, state_target, nu
+            )
+            # Weight only the base orientation (indices 3-5 in velocity space)
+            orientation_weights = np.zeros(self.state.ndx)
+            orientation_weights[3:6] = 1.0  # Base orientation components
+            baseOrientationActivation = crocoddyl.ActivationModelWeightedQuad(
+                orientation_weights**2
+            )
+            baseOrientationCost = crocoddyl.CostModelResidual(
+                self.state, baseOrientationActivation, baseOrientationResidual
+            )
+            costModel.addCost("baseYawTrack", baseOrientationCost, baseYawWeight)  # Use customizable weight
+
         for i in supportFootIds:
             cone = crocoddyl.WrenchCone(
                 self.Rsurf, self.mu, np.array([0.1, 0.05]))
@@ -630,7 +860,7 @@ class SimpleBipedGaitProblem:
             baseAngularVelCost = crocoddyl.CostModelResidual(
                 self.state, angularVelActivation, baseAngularVelResidual
             )
-            costModel.addCost("baseAngularVel", baseAngularVelCost, 1e8)  # Very high weight
+            costModel.addCost("baseAngularVel", baseAngularVelCost, 1e8)  # Original weight
         except:
             pass  # Skip if base_link frame doesn't exist
 
@@ -645,24 +875,34 @@ class SimpleBipedGaitProblem:
         for leg in range(2):  # Left and right legs
             leg_joint_weights += [
                 0.01,    # Hip_Pitch
-                50.0,    # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.5,    # Hip_Roll - HIGHER weight to prevent excessive deviation
                 0.01,    # Hip_Yaw
                 0.001,   # Knee_Pitch - LOWER weight to allow more bending
                 0.01,    # Ankle_Pitch
                 0.01,    # Ankle_Roll
             ]
-
-        stateWeights = np.array(
-            [0, 0, 0] +                          # base position (free)
-            [5e3] * 3 +                      # base orientation
-            [100.0] * num_upper_body +         # upper body joints - HIGHER weight
-            leg_joint_weights +                # leg joints with higher hip roll weight
-            [100, 100, 1e3] +                        # base linear velocity
-            [5e3] * 3 +                        # base angular velocity - VERY HIGH
-            [10] * (self.state.nv - 6)         # joint velocities
-        )
+        if baseYawTask is not None:
+            stateWeights = np.array(
+                [0, 0, 0] +                          # base position (free)
+                [5e3] * 3 +                          # base orientation (same as default)
+                [100.0] * num_upper_body +         # upper body joints - HIGHER weight
+                leg_joint_weights +                # leg joints with higher hip roll weight
+                [100, 100, 1e3] +                        # base linear velocity
+                [5e3] * 3 +                        # base angular velocity
+                [10] * (self.state.nv - 6)         # joint velocities
+            )
+        else:
+            stateWeights = np.array(
+                [0, 0, 0] +                          # base position (free)
+                [5e3] * 3 +                      # base orientation
+                [100.0] * num_upper_body +         # upper body joints - HIGHER weight
+                leg_joint_weights +                # leg joints with higher hip roll weight
+                [100, 100, 1e3] +                        # base linear velocity
+                [5e3] * 3 +                        # base angular velocity - VERY HIGH
+                [10] * (self.state.nv - 6)         # joint velocities
+            )
         stateResidual = crocoddyl.ResidualModelState(
-            self.state, self.rmodel.defaultState, nu
+            self.state, state_target, nu
         )
         stateActivation = crocoddyl.ActivationModelWeightedQuad(
             stateWeights**2)
@@ -720,26 +960,28 @@ class SimpleBipedGaitProblem:
                 dmodel, control, timeStep)
         return model
 
-    def createFootSwitchModel(self, supportFootIds, swingFootTask, pseudoImpulse=False):
+    def createFootSwitchModel(self, supportFootIds, swingFootTask, pseudoImpulse=False, baseYawTask=None):
         """Action model for a foot switch phase.
 
         :param supportFootIds: Ids of the constrained feet
         :param swingFootTask: swinging foot task
         :param pseudoImpulse: true for pseudo-impulse models, otherwise it uses the
             impulse model
+        :param baseYawTask: target yaw angle for the base (default: None)
         :return action model for a foot switch phase
         """
         if pseudoImpulse:
-            return self.createPseudoImpulseModel(supportFootIds, swingFootTask)
+            return self.createPseudoImpulseModel(supportFootIds, swingFootTask, baseYawTask)
         else:
-            return self.createImpulseModel(supportFootIds, swingFootTask)
+            return self.createImpulseModel(supportFootIds, swingFootTask, baseYawTask=baseYawTask)
 
-    def createPseudoImpulseModel(self, supportFootIds, swingFootTask):
+    def createPseudoImpulseModel(self, supportFootIds, swingFootTask, baseYawTask=None):
         """Action model for pseudo-impulse models.
 
         A pseudo-impulse model consists of adding high-penalty cost for the contact
         velocities.
         :param swingFootTask: swinging foot task
+        :param baseYawTask: target yaw angle for the base (default: None)
         :return pseudo-impulse differential action model
         """
         # Creating a 6D multi-contact model, and then including the supporting
@@ -814,12 +1056,28 @@ class SimpleBipedGaitProblem:
         for leg in range(2):  # Left and right legs
             leg_joint_weights += [
                 0.01,    # Hip_Pitch
-                50.0,    # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.5,    # Hip_Roll - HIGHER weight to prevent excessive deviation
                 0.01,    # Hip_Yaw
                 0.001,   # Knee_Pitch - LOWER weight to allow more bending
                 0.01,    # Ankle_Pitch
                 0.01,    # Ankle_Roll
             ]
+
+        # Create state target with custom base yaw if specified
+        state_target = self.rmodel.defaultState.copy()
+        if baseYawTask is not None:
+            # Modify state target to have the desired base yaw
+            target_quat = pinocchio.Quaternion(
+                np.cos(baseYawTask / 2),  # w
+                0.0,  # x
+                0.0,  # y
+                np.sin(baseYawTask / 2)  # z
+            )
+            target_quat.normalize()
+            state_target[3] = target_quat.x  # qx
+            state_target[4] = target_quat.y  # qy
+            state_target[5] = target_quat.z  # qz
+            state_target[6] = target_quat.w  # qw
 
         stateWeights = np.array(
             [0, 0, 0] +                        # base position
@@ -831,7 +1089,7 @@ class SimpleBipedGaitProblem:
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
-            self.state, self.rmodel.defaultState, nu
+            self.state, state_target, nu
         )
         stateActivation = crocoddyl.ActivationModelWeightedQuad(
             stateWeights**2)
@@ -875,7 +1133,7 @@ class SimpleBipedGaitProblem:
         return model
 
     def createImpulseModel(
-        self, supportFootIds, swingFootTask, JMinvJt_damping=1e-12, r_coeff=0.0
+        self, supportFootIds, swingFootTask, JMinvJt_damping=1e-12, r_coeff=0.0, baseYawTask=None
     ):
         """Action model for impulse models.
 
@@ -883,6 +1141,7 @@ class SimpleBipedGaitProblem:
         contacts.
         :param supportFootIds: Ids of the constrained feet
         :param swingFootTask: swinging foot task
+        :param baseYawTask: target yaw angle for the base (default: None)
         :return impulse action model
         """
         # Creating a 6D multi-contact model, and then including the supporting foot
@@ -917,12 +1176,28 @@ class SimpleBipedGaitProblem:
         for leg in range(2):  # Left and right legs
             leg_joint_weights += [
                 0.1,     # Hip_Pitch
-                50.0,    # Hip_Roll - HIGHER weight to prevent excessive deviation
+                0.5,    # Hip_Roll - HIGHER weight to prevent excessive deviation
                 0.1,     # Hip_Yaw
                 0.01,    # Knee_Pitch - LOWER weight to allow more bending
                 0.1,     # Ankle_Pitch
                 0.1,     # Ankle_Roll
             ]
+
+        # Create state target with custom base yaw if specified
+        state_target = self.rmodel.defaultState.copy()
+        if baseYawTask is not None:
+            # Modify state target to have the desired base yaw
+            target_quat = pinocchio.Quaternion(
+                np.cos(baseYawTask / 2),  # w
+                0.0,  # x
+                0.0,  # y
+                np.sin(baseYawTask / 2)  # z
+            )
+            target_quat.normalize()
+            state_target[3] = target_quat.x  # qx
+            state_target[4] = target_quat.y  # qy
+            state_target[5] = target_quat.z  # qz
+            state_target[6] = target_quat.w  # qw
 
         stateWeights = np.array(
             [0, 0, 0]+                        # base position
@@ -934,7 +1209,7 @@ class SimpleBipedGaitProblem:
             [10] * (self.state.nv - 6)         # joint velocities
         )
         stateResidual = crocoddyl.ResidualModelState(
-            self.state, self.rmodel.defaultState, 0
+            self.state, state_target, 0
         )
         stateActivation = crocoddyl.ActivationModelWeightedQuad(
             stateWeights**2)

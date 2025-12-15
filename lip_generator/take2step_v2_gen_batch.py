@@ -63,7 +63,7 @@ YAW_STEP_UNIT = 0.2
 
 # Solver parameters
 MAX_ITERATIONS = 600  # Increased for better convergence with higher accuracy requirements
-SOLVER_THRESHOLD = 5e-4  # Tightened threshold for more precise solutions
+SOLVER_THRESHOLD = 1e-5  # Tightened threshold for more precise solutions
 
 
 def get_memory_usage():
