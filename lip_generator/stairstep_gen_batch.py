@@ -24,7 +24,7 @@ import numpy as np
 import pinocchio
 import crocoddyl
 import matplotlib.pyplot as plt
-from step import SimpleBipedGaitProblem
+from step_stair import SimpleBipedStairProblem
 import psutil
 import gc
 import os
@@ -49,21 +49,21 @@ PLOT = 0
 CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
 
 # Step generation parameters
-STEP_HEIGHT = 0.125  # Step height in meters
+STEP_HEIGHT = 0.15  # Step height in meters
 WAIT_TIME_RANGE = (0.8, 1.0)  # Waiting period before step (seconds)
 MID_WAIT_TIME_RANGE = (0.3, 0.6)  # Waiting period between two steps (seconds)
 # Grid sampling parameters
 GRID_X_STEPS = 3  # Number of steps in x direction
 GRID_Y_STEPS = 3  # Number of steps in y direction
 GRID_YAW_STEPS = 3  # Number of steps in yaw direction
-X_STEP_UNIT = 0.1
+X_STEP_UNIT = 0.2
 Y_STEP_UNIT = 0.05
 Y_OFFSET = 0.17
 YAW_STEP_UNIT = 0.2
 
 # Solver parameters
-MAX_ITERATIONS = 600  # Increased for better convergence with higher accuracy requirements
-SOLVER_THRESHOLD = 1e-5  # Tightened threshold for more precise solutions
+MAX_ITERATIONS = 500  # Increased for better convergence with higher accuracy requirements
+SOLVER_THRESHOLD = 1e-4  # Tightened threshold for more precise solutions
 
 
 def get_memory_usage():
@@ -164,11 +164,10 @@ def generate_grid_samples(
     lfPos0, rfPos0, grid_x_steps, grid_y_steps, x_step_unit, y_step_unit, y_offset
 ):
     samples = []
-    x_values_right = np.arange(-grid_x_steps/2, grid_x_steps/2) * x_step_unit 
+    x_values_right = np.linspace(int(-grid_x_steps/2), int(grid_x_steps/2), grid_x_steps) * x_step_unit 
     y_values_right = -np.arange(grid_y_steps) * y_step_unit - y_offset
-
     #left swing, respected to right stance
-    x_values_left = np.arange(-grid_x_steps/2, grid_x_steps/2) * x_step_unit 
+    x_values_left = np.linspace(int(-grid_x_steps/2), int(grid_x_steps/2), grid_x_steps) * x_step_unit 
     y_values_left = np.arange(grid_y_steps) * y_step_unit + y_offset
     # First sequence: Right foot swings, then left foot swings
     for dx in x_values_right:
@@ -237,7 +236,7 @@ def solve_stepping_problem(gait, x0, left_target, right_target, target_yaw=0.0, 
         if np.any(np.isnan(left_target)) or np.any(np.isnan(right_target)):
             return None, False
 
-        problem = gait.createSingleStepProblem(x0, left_target, right_target, TIME_STEP, STEP_KNOTS, SUPPORT_KNOTS, STEP_HEIGHT, target_yaw, TRANSITION_KNOTS, COM_SHIFT_RATIO, INITIAL_COM_SHIFT)
+        problem = gait.createSingleStairStepProblem(x0, left_target, right_target, TIME_STEP, STEP_KNOTS, SUPPORT_KNOTS, STEP_HEIGHT, target_yaw, TRANSITION_KNOTS, COM_SHIFT_RATIO, INITIAL_COM_SHIFT)
 
         solver = crocoddyl.SolverIntro(problem)
         solver.th_stop = SOLVER_THRESHOLD
@@ -744,7 +743,7 @@ def main():
 
     # Initialize gait problem
     print("\n[2/4] Initializing gait problem...")
-    gait = SimpleBipedGaitProblem(robot.model, rightFoot, leftFoot, fwddyn=False)
+    gait = SimpleBipedStairProblem(robot.model, rightFoot, leftFoot, fwddyn=False)
 
     # Create display (if visualization enabled)
     display = create_display(robot)
@@ -756,6 +755,7 @@ def main():
     grid_samples = generate_grid_samples(
         lfPos0, rfPos0, GRID_X_STEPS, GRID_Y_STEPS, X_STEP_UNIT, Y_STEP_UNIT, Y_OFFSET
     )
+    # print(grid_samples)
     # Shuffle with a fixed seed for reproducibility
     shuffle_seed = 42
     np.random.seed(shuffle_seed)
@@ -839,7 +839,7 @@ def main():
         except Exception as e:
             print(f"✗ Failed to generate wait_data_after: {e}")
             continue
-        
+
         # Concatenate: waiting_before + step + waiting_mid + step2 + waiting_after
         all_q.append(wait_data_before["q"])
         all_q.append(step_data["q"])
