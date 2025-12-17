@@ -124,9 +124,24 @@ class SimpleBipedStairProblem:
         ]
         loco3dModel += doubleSupport_initial
 
-        # Calculate final COM position (center between both feet)
-        com_final = (leftFootTarget + rightFootTarget) / 2
-        com_final[2] = pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]
+        # Calculate final COM position (shifted towards the lower foot)
+        # First, compute center between final foot positions
+        com_final_center = (leftFootTarget + rightFootTarget) / 2
+
+        # Determine which foot is lower (has smaller z coordinate)
+        if leftFootTarget[2] < rightFootTarget[2]:
+            # Left foot is lower
+            lower_foot_pos = leftFootTarget.copy()
+        else:
+            # Right foot is lower (or same height)
+            lower_foot_pos = rightFootTarget.copy()
+
+        # Shift COM towards lower foot from the center, based on comShiftRatio
+        # Only shift in x direction, keep y centered for lateral stability
+        com_displacement_x = lower_foot_pos[0] - com_final_center[0]
+        com_final_x = com_final_center[0] + com_displacement_x * comShiftRatio
+        com_final_y = com_final_center[1]  # Keep y centered between feet
+        com_final = np.array([com_final_x, com_final_y, pinocchio.centerOfMass(self.rmodel, self.rdata, q0)[2]])
 
         # Determine which foot to move first (the one with larger movement)
         if leftFootMovement > rightFootMovement:
@@ -316,7 +331,7 @@ class SimpleBipedStairProblem:
                     supportFootIds,
                     comTask=comTask,
                     swingFootTask=swingFootTask,
-                    footWeight=1e9,  # Very high weight to enforce straight line trajectory in x,y
+                    footWeight=5e9,  # Very high weight to enforce straight line trajectory in x,y
                     baseYawTask=baseYawDuringSwing,  # Keep base yaw fixed during swing
                     # baseYawWeight=1e10,  # Moderate weight (hip yaw constraints do most of the work)
                     # progressRatio=progress,  # Pass current progress for landing damping
@@ -372,7 +387,10 @@ class SimpleBipedStairProblem:
         if isinstance(comTask, np.ndarray):
             comResidual = crocoddyl.ResidualModelCoMPosition(
                 self.state, comTask, nu)
-            comTrack = crocoddyl.CostModelResidual(self.state, comResidual)
+            # Use weighted activation to only track x and y, let z move freely
+            comWeights = np.array([1.0, 1.0, 0.0])  # Track x, y but not z
+            comActivation = crocoddyl.ActivationModelWeightedQuad(comWeights**2)
+            comTrack = crocoddyl.CostModelResidual(self.state, comActivation, comResidual)
             costModel.addCost("comTrack", comTrack, comWeight)
 
         state_target = self.rmodel.defaultState.copy()
@@ -704,7 +722,7 @@ class SimpleBipedStairProblem:
             [5e3, 5e3, 100] +                        # base orientation
             [10] * num_upper_body +           # upper body joints - HIGHER weight
             leg_joint_weights +                # leg joints with higher hip roll weight
-            [100, 100, 500] +                  # base linear velocity
+            [100, 100, 100] +                  # base linear velocity
             [5e3] * 3 +                        # base angular velocity
             [10] * num_upper_body +            # upper body joint velocities
             leg_joint_velocity_weights         # leg joint velocities
