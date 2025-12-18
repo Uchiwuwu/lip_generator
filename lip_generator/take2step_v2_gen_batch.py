@@ -42,8 +42,8 @@ TIME_STEP = 0.02
 STEP_KNOTS = 20
 SUPPORT_KNOTS = 20  # Increased from 10 for smoother and more accurate COM transitions
 TRANSITION_KNOTS = 20  # Knots for post-swing COM centering phase
-COM_SHIFT_RATIO = 0.65  # Ratio of COM shift towards center during swing (0.8 = 80%)
-INITIAL_COM_SHIFT = 0.65  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
+COM_SHIFT_RATIO = 0.5  # Ratio of COM shift towards center during swing (0.8 = 80%)
+INITIAL_COM_SHIFT = 0.5  # Ratio of COM shift towards stance foot in initial phase (0.8->0.9 for more shift)
 WITHDISPLAY = False
 PLOT = 0
 CHECKPOINT_FREQUENCY = 0  # Save checkpoint every N successful trajectories (0 to disable)
