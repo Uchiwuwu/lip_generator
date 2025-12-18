@@ -55,7 +55,7 @@ MID_WAIT_TIME_RANGE = (0.3, 0.6)  # Waiting period between two steps (seconds)
 # Grid sampling parameters
 GRID_X_STEPS = 5  # Number of steps in x direction
 GRID_Y_STEPS = 3  # Number of steps in y direction
-GRID_YAW_STEPS = 3  # Number of steps in yaw direction
+GRID_YAW_STEPS = 5  # Number of steps in yaw direction
 X_STEP_UNIT = 0.1
 Y_STEP_UNIT = 0.05
 Y_OFFSET = 0.17
